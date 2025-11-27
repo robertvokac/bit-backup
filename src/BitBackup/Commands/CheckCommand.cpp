@@ -1,0 +1,712 @@
+/*
+ * MIT License
+ * Copyright (c) 2023-2025 Robert Vokac
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+
+// import java.io.File;
+// import java.io.IOException;
+// import java.util.ArrayList;
+// import java.util.Date;
+// import java.util.List;
+// import java.util.UUID;
+// import java.util.stream.Collectors;
+// import org.apache.logging.log4j.LogManager;
+// import org.apache.logging.log4j.Logger;
+// import com.robertvokac.bitbackup.core.BitBackupContext;
+// import com.robertvokac.bitbackup.core.Command;
+// import com.robertvokac.bitbackup.core.BitBackupArgs;
+// import com.robertvokac.bitbackup.core.BitBackupException;
+// import com.robertvokac.bitbackup.core.BitBackupFiles;
+// import com.robertvokac.bitbackup.core.ListSet;
+// import com.robertvokac.bitbackup.core.Utils;
+// import com.robertvokac.bitbackup.entity.FsFile;
+// import com.robertvokac.bitbackup.entity.SystemItem;
+// import com.robertvokac.bitbackup.files.FileEntry;
+// import com.robertvokac.bitbackup.persistence.api.FileRepository;
+// import com.robertvokac.bitbackup.persistence.impl.sqlite.SqliteDatabaseMigration;
+// import com.robertvokac.dbmigration.core.main.MigrationResult;
+// import com.robertvokac.powerframework.time.duration.Duration;
+// import com.robertvokac.powerframework.time.moment.LocalDateTime;
+// import com.robertvokac.powerframework.time.utils.ProgressTracker;
+// import com.robertvokac.powerframework.time.utils.TimeUnit;
+
+#include "BitBackup/Core/Command.h"
+#include "BitBackup/Commands/CheckCommand.h"
+#include <string>
+
+#include "BitBackup/Core/BitBackupContext.h"
+#include "BitBackup/Core/BitBackupFiles.h"
+#include "BitBackup/Core/ListSet.h"
+#include <ctime>
+#include <random>
+#include <algorithm>
+#include <vector>
+
+#include "BitBackup/Core/ProgressTracker.h"
+#include "BitBackup/Files/FileEntry.h"
+#include "BitBackup/Persistence/Impl/Sqlite/MigrationResult.h"
+#include "BitBackup/Persistence/Impl/Sqlite/SqliteDatabaseMigration.h"
+
+namespace BitBackup::Core {
+    class BitBackupException;
+}
+
+/**
+ *
+ * @author r
+ */
+namespace BitBackup::Commands {
+    using std::string;
+
+    CheckCommand::CheckCommand() = default;
+
+    string CheckCommand::getName() const {
+        return NAME;
+    }
+
+    static int iStatic = 0;
+
+    string CheckCommand::run(const Core::BitBackupArgs &bitBackupArgs) {
+        Core::BitBackupFiles bitBackupFiles(bitBackupArgs);
+        Core::BitBackupContext bitBackupContext(bitBackupFiles.workingDirAbsolutePath);
+        //
+        //part 1:
+        part1CheckDbHasExpectedHashSum(bitBackupFiles);
+        //part 2:
+
+        bool part2Result = part2MigrateDbSchemaIfNeeded(bitBackupFiles);
+        if (!part2Result) {
+            return "part 2 failed";
+        }
+        //part 3:
+        part3UpdateVersionInDbIfNeeded(bitBackupContext);
+
+        BitBackup::Core::ListSet<File> filesInFileSystem = part4FoundFilesInFileSystem(bitBackupFiles, bitBackupArgs);
+
+        // } catch (BitBackup::Core::BitBackupException ex) {
+        //     return "Part 4 failed: " + ex.getMessage();
+        // }
+        Core::ListSet<FsFile> filesInDb = part5FoundFilesInDb(*bitBackupContext.getFileRepository(), bitBackupArgs);
+
+        tp now = part6AddNewFilesToDb(filesInFileSystem, bitBackupFiles, filesInDb, bitBackupContext);
+
+        vector<FsFile> filesToBeRemovedFromDb = part7RemoveDeletedFilesFromDb(filesInDb, filesInFileSystem, bitBackupContext);
+
+        vector<FsFile> filesWithBitRot = part8CompareContentAndLastModificationDate(filesInDb, filesToBeRemovedFromDb, bitBackupContext, now);
+
+        part9CreateReportCsvIfNeeded(bitBackupArgs, bitBackupFiles, filesWithBitRot);
+        part10CalculateCurrentHashSumOfDbFile(bitBackupFiles);
+
+        cout << "==========" << endl;
+        cout << "Summary" << endl;
+
+        if (filesWithBitRot.empty()) {
+            cout << "Summary: OK : No files with bit rot were found." << std::endl;
+        } else {
+            std::cerr
+            << "Summary: KO : Some files "
+            << filesWithBitRot.size()
+            << " with bit rot were found." << std::endl;
+            for (FsFile f : filesWithBitRot) {
+                std::cerr
+                << "Bit rot detected: \""
+                << f.absolutePath
+                << "\""
+                << " expected_sha512="
+                << f.hashSumValue
+                <<" returned_sha512="
+                << Core::Utils::calculateSHA512Hash(File("./" + f.absolutePath))
+                << std::endl;
+            }
+
+        }
+
+        cout << "foundFiles=" << foundFiles << std::endl;
+        cout << "foundDirs=" << foundDirs << endl;
+
+        if (filesWithBitRot.empty()) {
+            return "";
+        }
+        if (!filesWithBitRot.empty()) {
+            std::ostringstream oss;
+            for (size_t i = 0; i < filesWithBitRot.size(); ++i) {
+                oss << filesWithBitRot[i].absolutePath;
+                if (i != filesWithBitRot.size() - 1) {
+                    oss << "\n";
+                }
+            }
+            return oss.str();
+        }
+        return "";
+
+    }
+
+    /**
+     * Checks, if SQLite DB file has the expected SHA-512 hash sum
+     *
+     * @param bitBackupSQLite3File
+     * @param bitBackupSQLite3FileSha512
+     * @throws BitBackupException - if this check fails.
+     */
+    void CheckCommand::part1CheckDbHasExpectedHashSum(const Core::BitBackupFiles& bitBackupFiles) noexcept(false) {
+        cout << "** Part "\
+        << CheckCommandPart::CHECK_OLD_DB_CHECKSUM
+        << ": Checking DB, if has expected check sum." << std::endl;
+        File bitBackupSQLite3FileSha512 = bitBackupFiles.bitBackupSQLite3FileSha512;
+        
+        bool dbExists = std::filesystem::exists(bitBackupFiles.bitBackupSQLite3File);
+        bool checkSumExists = std::filesystem::exists(bitBackupFiles.bitBackupSQLite3FileSha512);
+
+        if (dbExists && checkSumExists) {
+
+            string expectedHash = Core::Utils::readTextFromFile(bitBackupSQLite3FileSha512);
+            string returnedHash = Core::Utils::calculateSHA512Hash(bitBackupFiles.bitBackupSQLite3File);
+            if (returnedHash != expectedHash) {
+                std::ostringstream oss;
+                oss <<
+                         "Part " << CheckCommandPart::CHECK_OLD_DB_CHECKSUM <<": KO. "
+                        << "Unexpected hash "
+                        << returnedHash
+                        << ". Expected SHA-512 hash sum was: "
+                        << expectedHash
+                        << " for file "
+                        << string(absolute(bitBackupFiles.bitBackupSQLite3File)) << std::endl;
+                std::cerr << oss.str();
+
+                cout << "Exiting because of the previous error." << std::endl;
+                throw Core::BitBackupException(oss.str());
+            }
+        } else {
+            cout << "Part "
+            << CheckCommandPart::CHECK_OLD_DB_CHECKSUM
+            << ": OK. Nothing to do: {}"
+            << (!dbExists ? "DB does not yet exist." : "Check sum file does not exist.") << std::endl;
+
+
+        }
+    }
+
+    bool CheckCommand::part2MigrateDbSchemaIfNeeded(Core::BitBackupFiles& bitBackupFiles) {
+        cout << "** Part "
+        << CheckCommandPart::MIGRATE_DB_SCHEMA_IF_NEEDED
+        << ": Migrating schema, if needed." << std::endl;
+
+
+            Persistence::Impl::Sqlite::MigrationResult migrationResult = Persistence::Impl::Sqlite::SqliteDatabaseMigration::getInstance()->migrate(bitBackupFiles.workingDirAbsolutePath);
+            if (migrationResult == Persistence::Impl::Sqlite::MigrationResult::SUCCESS) {
+                cout << "Part " << CheckCommandPart::MIGRATE_DB_SCHEMA_IF_NEEDED << ": OK. Success." << std::endl;
+                return true;
+            }
+        std::cerr << "Part " << CheckCommandPart::MIGRATE_DB_SCHEMA_IF_NEEDED << ": KO. Failed." << CheckCommandPart::MIGRATE_DB_SCHEMA_IF_NEEDED << std::endl;
+        return false;
+    }
+
+    void CheckCommand::part3UpdateVersionInDbIfNeeded(Core::BitBackupContext& bitBackupContext) {
+        cout << "** Part "
+        << CheckCommandPart::UPDATE_VERSION
+        << ": Updating version, if needed." << std::endl;
+
+        string bitBackupVersion = bitBackupContext.getSystemItemRepository()->read(BIBVERSION).value;
+        cout << "Before: bib.version=" << bitBackupVersion << std::endl;
+        if (bitBackupVersion == "") {
+            bitBackupContext.getSystemItemRepository()->create(Entity::SystemItem("bib.version", "0.0.0-SNAPSHOT"));
+        }
+        cout << "Updating version in DB." << std::endl;
+        bitBackupVersion = bitBackupContext.getSystemItemRepository()->read("bib.version").value;
+        cout << "After: bib.version=" + bitBackupVersion << std::endl;
+        cout << "Part "
+        << CheckCommandPart::UPDATE_VERSION
+        << ": OK." << std::endl;
+    }
+
+    Core::ListSet<File> CheckCommand::part4FoundFilesInFileSystem(
+        Core::BitBackupFiles& bitBackupFiles,
+        const Core::BitBackupArgs& bitBackupArgs
+    ) {
+        cout << "** Part " << CheckCommandPart::FOUND_FILES_IN_FILESYSTEM
+             << ": Loading files in filesystem" << endl;
+
+        const auto rootAbs = std::filesystem::absolute(bitBackupFiles.workingDir).string();
+        std::vector<File> found;
+
+        found.reserve(200000);
+
+        for (auto const& e : std::filesystem::recursive_directory_iterator(bitBackupFiles.workingDir)) {
+
+            if (!std::filesystem::is_regular_file(e))
+                continue;
+
+            const auto abs = e.path().string();
+
+            if (abs == std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3File))
+                continue;
+            if (abs == std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3FileSha512))
+                continue;
+
+            const auto rel = abs.substr(rootAbs.size() + 1);
+
+            if (bitBackupFiles.bitBackupIgnoreRegex->test(rel))
+                continue;
+
+            found.push_back(e.path());
+        }
+
+        cout << "Part " << CheckCommandPart::FOUND_FILES_IN_FILESYSTEM
+             << ": Found " << found.size() << " files." << endl;
+
+        return Core::ListSet<File>(
+            std::move(found),
+            [&bitBackupFiles](const File& f) {
+                auto abs = std::filesystem::absolute(f).string();
+                auto rootAbs = std::filesystem::absolute(bitBackupFiles.workingDir).string();
+                return abs.substr(rootAbs.size() + 1);
+            }
+        );
+    }
+
+
+    string CheckCommand::loadPathButOnlyTheNeededPart(const std::filesystem::path &currentDir, const std::filesystem::path &file) {
+        string currentDirAbsolutePath = absolute(currentDir).string();
+        string fileAbsolutePath = absolute(file).string();
+        return fileAbsolutePath.substr(currentDirAbsolutePath.size() + 1);
+    }
+    std::vector<std::filesystem::path> CheckCommand::foundFilesInCurrentDir(
+        const File& currentDir,
+        std::vector<File>& filesAlreadyFound,
+        Core::BitBackupFiles& bitBackupFiles,
+        const Core::BitBackupArgs& bitBackupArgs,
+        string& workingDir) {
+
+        for (const auto& f : std::filesystem::directory_iterator(currentDir)) {
+            bool isBitBackupIgnore = f.path().filename().string() == bitBackupFiles.bitBackupIgnore.filename().string();
+
+            string fAbs = absolute(f).string();
+            string bbAbs = std::filesystem::absolute(bitBackupFiles.bitBackupIgnore).string();
+            if (isBitBackupIgnore && fAbs != bbAbs) {
+                bitBackupFiles.bitBackupIgnoreRegex.get()->addBitBackupIgnoreFile(f, bitBackupFiles.workingDir);
+            }
+            if (is_directory(f)) {
+                ++foundDirs;
+                if (bitBackupArgs.isBitBackupIndexEnabled()) {
+                    bitbackupindexSB << Files::FileEntry(f.path()).toCsvLine() << endl;
+                }
+                foundFilesInCurrentDir(
+                    f,
+                    filesAlreadyFound,
+                    bitBackupFiles,
+                    bitBackupArgs,
+                    workingDir);
+            } else {
+                ++foundFiles;
+                if (fAbs == absolute(bitBackupFiles.bitBackupSQLite3File)) {
+                    continue;
+                }
+                if (fAbs == absolute(bitBackupFiles.bitBackupSQLite3FileSha512)) {
+                    continue;
+                }
+
+                ++iii;
+                //System.out.println("Testing file: " + iii + "#" + " " + loadPathButOnlyTheNeededPart(currentDirRoot, f));
+                if (bitBackupFiles.bitBackupIgnoreRegex.get()->test(
+                    loadPathButOnlyTheNeededPart(bitBackupFiles.workingDir, f))
+                    ) {
+                    continue;
+                }
+                if (bitBackupArgs.isBitBackupIndexEnabled()) {
+                    auto csv = Files::FileEntry(f.path()).toCsvLine();
+
+                    bitbackupindexSB << csv << endl;
+                }
+                filesAlreadyFound.push_back(f);
+
+                if (bitBackupArgs.isVerboseLoggingEnabled() || iStatic % 100 == 0) {
+                    cout << "Found file in file system: #" << (++iStatic) << " "
+                    << absolute(f).string().substr(workingDir.length() + 1) << std::endl;
+                }
+            }
+        }
+        return filesAlreadyFound;
+    }
+
+    Core::ListSet<Entity::FsFile> CheckCommand::part5FoundFilesInDb(Persistence::Api::FileRepository& fileRepository, const Core::BitBackupArgs& bitBackupArgs) {
+        cout << "** Part "<< CheckCommandPart::FOUND_FILES_IN_DB << ": Loading files in DB" << std::endl;
+        vector<Entity::FsFile> filesInDb = fileRepository.list();
+
+        Core::ListSet<Entity::FsFile> listSet((std::move(filesInDb)), []( const Entity::FsFile& f) {return f.absolutePath;});
+        cout << "Part " << CheckCommandPart::FOUND_FILES_IN_DB << ": Found " << listSet.size() << " files." << std::endl;
+        iStatic = 0;
+        if (bitBackupArgs.isVerboseLoggingEnabled()) {
+
+            for (const auto& f : listSet.getSet()) {
+                std::cout << "#" << (++iStatic) << " " << f << std::endl;
+            }
+
+        }
+        return listSet;
+    }
+
+    string print_clock(const tp& time) {
+        auto duration = time.time_since_epoch();
+        std::time_t timet = std::chrono::system_clock::to_time_t(time);
+        auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration) % 1000;
+
+        std::stringstream ss;
+        ss << std::put_time(std::localtime(&timet), "%Y-%m-%d %H:%M:%S");
+        ss << '.' << std::setfill('0') << std::setw(3) << milliseconds.count();
+        return ss.str();
+    }
+    string print_short_clock(const tp& time) {
+        auto duration = time.time_since_epoch();
+        std::time_t timet = std::chrono::system_clock::to_time_t(time);
+        auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration) % 1000;
+
+        std::stringstream ss;
+        ss << std::put_time(std::localtime(&timet), "%Y%m%d%H%M%S");
+        ss << std::setfill('0') << std::setw(3) << milliseconds.count();
+        return ss.str();
+    }
+
+    // tp lastModified(const std::string& filePath) {
+    //     auto ftime = std::filesystem::last_write_time(filePath);
+    //     auto sctp = std::chrono::system_clock::now() + (ftime - std::filesystem::file_time_type::clock::now());
+    //     return sctp;
+    // }
+    std::string last_modified_string(const std::filesystem::path& p)
+    {
+        try
+        {
+            auto ftime = std::filesystem::last_write_time(p);
+
+            auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                ftime - std::filesystem::file_time_type::clock::now()
+                + std::chrono::system_clock::now()
+            );
+
+            auto tt = std::chrono::system_clock::to_time_t(sctp);
+
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                sctp.time_since_epoch()
+            ) % 1000;
+
+            std::tm tm = *std::localtime(&tt);
+
+            std::stringstream ss;
+            ss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S.");
+            ss << std::setfill('0') << std::setw(3) << ms.count();
+            return ss.str();
+        }
+        catch (...)
+        {
+            return "1970-01-01 00:00:00.000";
+        }
+    }
+
+
+
+    tp CheckCommand::part6AddNewFilesToDb(
+        Core::ListSet<File>& filesInFileSystem,
+        Core::BitBackupFiles& bitBackupFiles,
+        Core::ListSet<Entity::FsFile>& filesInDb,
+        Core::BitBackupContext& bitBackupContext) {
+
+        cout
+        << "** Part "
+        << CheckCommandPart::ADD_NEW_FILES_TO_DB
+        << ": Adding new files to DB"
+        << std::endl;
+
+        tp now = std::chrono::system_clock::now();
+
+        int processedCount0 = 0;
+        vector<Entity::FsFile> filesMissingInDb;
+        for (const File& fileInDir : filesInFileSystem.getList()) {
+            ++processedCount0;
+            if (processedCount0 % 100 == 0) {
+                const double progress = static_cast<double>(processedCount0) / filesInFileSystem.getList().size() * 100;
+                cout
+                << "Part "
+                << CheckCommandPart::ADD_NEW_FILES_TO_DB
+                << ": Add - Progress: "
+                << processedCount0
+                <<"/"
+                << filesInFileSystem.getList().size()
+                << " " << " "
+                << std::fixed << std::setprecision(2)
+                << progress
+                << " %" << std::endl;
+            }
+
+            string absolutePathOfFileInDir = loadPathButOnlyTheNeededPart(bitBackupFiles.workingDir, fileInDir);
+            if (!filesInDb.doesSetContain(absolutePathOfFileInDir)) {
+
+                Entity::FsFile fsFile = {
+                    Core::Utils::generateUUIDv4(),
+                        fileInDir.filename().string(),
+                        absolutePathOfFileInDir,
+                        last_modified_string(fileInDir),
+                        print_clock(now),
+                        BitBackup::Core::Utils::calculateSHA512Hash(fileInDir),
+                        "SHA-512",
+                        std::filesystem::file_size(fileInDir),
+                        "OK"
+                };
+                filesMissingInDb.push_back(fsFile);
+            }
+
+        }
+        cout << "Adding new files: " << filesMissingInDb.size() << std::endl;
+        bitBackupContext.getFileRepository()->create(filesMissingInDb);
+        return now;
+    }
+
+    vector<Entity::FsFile> CheckCommand::part7RemoveDeletedFilesFromDb(
+        Core::ListSet<Entity::FsFile>& filesInDb,
+        Core::ListSet<File>& filesInFileSystem,
+        Core::BitBackupContext& bitBackupContext) {
+        cout
+        << "** Part "
+        << CheckCommandPart::REMOVE_DELETED_FILES_FROM_DB
+        << ": Removing deleted files from DB"<< std::endl;
+        vector<Entity::FsFile> filesToBeRemovedFromDb;
+        int processedCount = 0;
+
+        for (Entity::FsFile fileInDb : filesInDb.getList()) {
+            processedCount = processedCount + 1;
+            if (processedCount % 100 == 0) {
+                double progress = ((double) processedCount) / filesInDb.getList().size() * 100;
+                cout
+                << "Part "
+                << CheckCommandPart::REMOVE_DELETED_FILES_FROM_DB
+                <<": Remove - Progress: " << processedCount
+                <<"/" << filesInDb.getList().size()
+                << std::fixed << std::setprecision(2)
+                <<" " << progress
+                << "%" << std::endl;
+            }
+
+            string absolutePathOfFileInDb = fileInDb.absolutePath;
+            if (!filesInFileSystem.doesSetContain(absolutePathOfFileInDb)) {
+
+                filesToBeRemovedFromDb.push_back(fileInDb);
+            }
+
+        }
+        cout
+        << "Part " << CheckCommandPart::REMOVE_DELETED_FILES_FROM_DB
+        <<": Removing files: " << filesToBeRemovedFromDb.size() << std::endl;
+
+
+        for (FsFile f : filesToBeRemovedFromDb) {
+            bitBackupContext.getFileRepository() -> remove(f);
+        }
+        return filesToBeRemovedFromDb;
+    }
+
+    bool does_vector_contain(vector<FsFile> v, FsFile x) {
+        return std::find(v.begin(), v.end(), x)
+        != v.end();
+    }
+
+    std::string seconds_to_duration_string(long total_seconds) {
+        const long seconds_per_day = 86400;
+        const long seconds_per_hour = 3600;
+        const long seconds_per_minute = 60;
+
+        long days = total_seconds / seconds_per_day;
+        total_seconds %= seconds_per_day;
+
+        long hours = total_seconds / seconds_per_hour;
+        total_seconds %= seconds_per_hour;
+
+        long minutes = total_seconds / seconds_per_minute;
+        long seconds = total_seconds % seconds_per_minute;
+
+        std::ostringstream oss;
+
+        if (days > 0) {
+            oss << days << " day" << (days > 1 ? "s " : " ");
+        }
+
+        if (hours > 0) {
+            oss << hours << " hour" << (hours > 1 ? "s " : " ");
+        }
+
+        if (minutes > 0) {
+            oss << minutes << " minute" << (minutes > 1 ? "s " : " ");
+        }
+
+        oss << seconds << " second" << (seconds > 1 ? "s" : "");
+
+        return oss.str();
+    }
+
+    vector<FsFile> CheckCommand::part8CompareContentAndLastModificationDate(
+        Core::ListSet<FsFile>& filesInDb, const vector<FsFile>& filesToBeRemovedFromDb,
+        Core::BitBackupContext& bitBackupContext,
+        tp& now) {
+        cout << "** Part "
+        << CheckCommandPart::COMPARE_CONTENT_AND_LAST_MODTIME
+        << ": Comparing Content and last modification date" << std::endl;
+        double countOfFilesToCalculateHashSum = filesInDb.size() - filesToBeRemovedFromDb.size();
+        int processedCount = 0;
+        //// Update modified files with same last modification date
+        vector<FsFile> filesWithBitRot;
+        vector<FsFile> filesToUpdateLastCheckDate;
+        int contentAndModTimeWereChanged = 0;
+
+        Core::ProgressTracker progressTracker = filesInDb.size() - filesToBeRemovedFromDb.size();
+        progressTracker.start();
+        for (FsFile fileInDb : filesInDb) {
+            string absolutePathOfFileInDb = fileInDb.absolutePath;
+            if (does_vector_contain(filesToBeRemovedFromDb,fileInDb)) {
+                //nothing to do
+                continue;
+
+            }
+            progressTracker.nextDone();
+            processedCount = processedCount + 1;
+
+            long remaining_seconds = progressTracker.getRemainingSecondsUntilEnd();
+            if (processedCount % 100 == 0) {
+                double progress = ((double) processedCount) / countOfFilesToCalculateHashSum * 100;
+                cout
+                << "Update - Progress: " << processedCount << "/" << countOfFilesToCalculateHashSum << " "
+                << std::fixed << std::setprecision(2)
+                << progress
+                <<"%" << std::endl;
+                cout
+                << "Remains: "
+                << seconds_to_duration_string(remaining_seconds) << std::endl;
+            }
+            File file ( bitBackupContext.getWorkingDirectory() + "/" +  absolutePathOfFileInDb);
+
+            auto lastModifiedString = last_modified_string(file);
+
+            string calculatedHash = Core::Utils::calculateSHA512Hash(file);
+            bool lastModificationDateWasChanged = lastModifiedString != fileInDb.lastModificationDate;
+
+            if (!lastModificationDateWasChanged && calculatedHash != fileInDb.hashSumValue) {
+                filesWithBitRot.push_back(fileInDb);
+                fileInDb.lastCheckDate = print_clock(now);
+                fileInDb.lastCheckResult = "KO";
+                bitBackupContext.getFileRepository()->updateFile(fileInDb);
+                continue;
+            }
+            if (lastModificationDateWasChanged) {
+                fileInDb.lastCheckDate = print_clock(now);
+                fileInDb.lastModificationDate = lastModifiedString;
+                fileInDb.hashSumValue = calculatedHash;
+                fileInDb.hashSumAlgorithm = "SHA-512";
+                fileInDb.size = std::filesystem::file_size(file);
+                fileInDb.lastCheckResult = "OK";
+                bitBackupContext.getFileRepository()->updateFile(fileInDb);
+                //System.out.println(fileInDb.toString());
+                contentAndModTimeWereChanged++;
+                continue;
+            }
+            if (!lastModificationDateWasChanged) {
+                fileInDb.lastCheckResult = "OK";
+
+                if (fileInDb.size == 0) {
+                    fileInDb.size = std::filesystem::file_size(file);
+                    bitBackupContext.getFileRepository()->updateFile(fileInDb);
+                } else {
+                    filesToUpdateLastCheckDate.push_back(fileInDb);
+                }
+                continue;
+            }
+
+        }
+        cout << "Part 8: Updating files - "
+             << (filesWithBitRot.empty() ? "no" : "some")
+             << " files with bit rots - content was changed and last modification is the same: "
+             << filesWithBitRot.size()
+             << std::endl;
+
+        cout << "Part 8: Updating files - content and last modification date were changed: "
+        << contentAndModTimeWereChanged << std::endl;
+        cout << "Part 8: Updating files - content and last modification date were not changed: "
+        <<filesToUpdateLastCheckDate.size() << std::endl;
+        string nowS = print_clock(now);
+        bitBackupContext.getFileRepository()->updateLastCheckDate(nowS, filesToUpdateLastCheckDate);
+
+        return filesWithBitRot;
+    }
+
+    void CheckCommand::part9CreateReportCsvIfNeeded(
+        const Core::BitBackupArgs& bitBackupArgs,
+        Core::BitBackupFiles& bitBackupFiles,
+        vector<FsFile>& filesWithBitRot) {
+        cout << "** Part 9: Creating csv report, if needed" << std::endl;
+        if (!bitBackupArgs.hasArgument("report")) {
+            cout << " Part 9: OK. Nothing to do. No option report was passed." << std::endl;
+            return;
+        }
+        if (!(bitBackupArgs.getArgument("report") == "true")) {
+            cout
+            << "Part 9: Nothing to do. Option report={}"
+            << bitBackupArgs.getArgument("report") << std::endl;
+
+            return;
+        }
+
+        File bibReportCsv = bitBackupFiles.bitBackupReportCsv;
+        if (std::filesystem::exists(bibReportCsv)) {
+
+            auto now = std::chrono::system_clock::now();
+
+            File backup(bibReportCsv.parent_path().string() + "/" + print_short_clock(now) + "." + bibReportCsv.filename().string());
+            std::rename(absolute(bibReportCsv).c_str(),absolute(backup).c_str());
+        }
+
+        std::stringstream sb;
+
+        if (!filesWithBitRot.empty()) {
+            sb <<"file;expected;calculated" << std::endl;;
+        }
+        for (FsFile const &f: filesWithBitRot) {
+            File file("./" + f.absolutePath);
+            sb << f.absolutePath
+                    << ";"
+                    << f.hashSumValue
+                    << ";"
+                    << Core::Utils::calculateSHA512Hash(file)
+                    << std::endl;
+        }
+
+
+        Core::Utils::writeTextToFile(sb.str(), bibReportCsv);
+        cout << "Part 9: OK." << std::endl;
+    }
+
+    void CheckCommand::part10CalculateCurrentHashSumOfDbFile(Core::BitBackupFiles& bitBackupFiles) {
+        cout << "** Part 10: Calculating current hash sum of DB file" << std::endl;
+        Core::Utils::writeTextToFile(
+            Core::Utils::calculateSHA512Hash(bitBackupFiles.bitBackupSQLite3File),
+            bitBackupFiles.bitBackupSQLite3FileSha512
+            );
+    }
+
+
+
+
+}

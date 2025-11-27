@@ -1,0 +1,13 @@
+#files to ignore
+
+*.metadata/**
+*.recommenders/**
+*target/**
+*build/**
+*.idea/**
+*.iml
+
+.bitbackup.sqlite3**
+
+cmake-build-debug/*
+

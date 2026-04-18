@@ -42,7 +42,9 @@ namespace BitBackup::Commands {
         }
 
         string VersionCommand::run(const Core::BitBackupArgs &bitBackupArgs) {
-            return "Bit Backup 0.0.0-SNAPSHOT";
+            string version = "Bit Backup 0.0.0-SNAPSHOT";
+            std::cout << version << std::endl;
+            return version;
         }
     ;
 }

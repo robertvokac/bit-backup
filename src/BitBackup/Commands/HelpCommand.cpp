@@ -49,7 +49,7 @@ namespace BitBackup::Commands {
         Detects bit rotten files in the given directory to keep your files forever.
 
     COMMAND
-        check       Generates the static website
+        check       Checks for bit rot in the given directory
                         OPTIONS
                             dir={working directory to be checked for bit rot}
                                 Optional. Default=. (current working directory)

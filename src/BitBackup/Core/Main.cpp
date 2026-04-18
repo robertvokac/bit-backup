@@ -32,7 +32,7 @@ namespace BitBackup::Core {
     class Main {
     public:
         static int main_(int argc, char *argv[]) {
-            std::cout << "Bir - Detects bit rotten files in the given directory to keep your files forever." <<
+            std::cout << "Bit Backup - Detects bit rotten files in the given directory to keep your files forever." <<
                     std::endl;
 
             std::vector<std::string> args(argv + 1, argv + argc);

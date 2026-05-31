@@ -45,6 +45,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <random>
 
 #include "BitBackup/Core/BitBackupException.h"
@@ -272,8 +273,13 @@ namespace BitBackup::Core {
     }
 
     std::string Utils::generateUUIDv4() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
+        static std::mt19937 gen = []() {
+            std::random_device rd;
+            std::seed_seq seq{rd(), rd(), rd(), rd(), rd(), rd(), rd(), rd()};
+            return std::mt19937(seq);
+        }();
+        static std::mutex genMutex;
+        std::lock_guard<std::mutex> lock(genMutex);
         std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFF);
 
         std::stringstream ss;

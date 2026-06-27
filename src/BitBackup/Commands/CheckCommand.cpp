@@ -59,6 +59,7 @@
 #include <ctime>
 #include <random>
 #include <algorithm>
+#include <unordered_set>
 #include <vector>
 
 #include "BitBackup/Core/ProgressTracker.h"
@@ -246,6 +247,12 @@ namespace BitBackup::Commands {
              << ": Loading files in filesystem" << endl;
 
         const auto rootAbs = std::filesystem::absolute(bitBackupFiles.workingDir).string();
+        // Hoist these out of the loop: they are constant across all entries, but
+        // std::filesystem::absolute() does path work + allocates on every call,
+        // so recomputing them per file was ~2 wasted absolute() calls per file.
+        const auto dbAbs = std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3File).string();
+        const auto dbShaAbs = std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3FileSha512).string();
+
         std::vector<File> found;
 
         found.reserve(200000);
@@ -257,9 +264,9 @@ namespace BitBackup::Commands {
 
             const auto abs = e.path().string();
 
-            if (abs == std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3File))
+            if (abs == dbAbs)
                 continue;
-            if (abs == std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3FileSha512))
+            if (abs == dbShaAbs)
                 continue;
 
             const auto rel = abs.substr(rootAbs.size() + 1);
@@ -275,10 +282,8 @@ namespace BitBackup::Commands {
 
         return Core::ListSet<File>(
             std::move(found),
-            [&bitBackupFiles](const File& f) {
-                auto abs = std::filesystem::absolute(f).string();
-                auto rootAbs = std::filesystem::absolute(bitBackupFiles.workingDir).string();
-                return abs.substr(rootAbs.size() + 1);
+            [rootAbs](const File& f) {
+                return std::filesystem::absolute(f).string().substr(rootAbs.size() + 1);
             }
         );
     }
@@ -489,7 +494,7 @@ namespace BitBackup::Commands {
         vector<Entity::FsFile> filesToBeRemovedFromDb;
         int processedCount = 0;
 
-        for (Entity::FsFile fileInDb : filesInDb.getList()) {
+        for (const Entity::FsFile& fileInDb : filesInDb.getList()) {
             processedCount = processedCount + 1;
             if (processedCount % 100 == 0) {
                 double progress = ((double) processedCount) / filesInDb.getList().size() * 100;
@@ -515,15 +520,10 @@ namespace BitBackup::Commands {
         <<": Removing files: " << filesToBeRemovedFromDb.size() << std::endl;
 
 
-        for (FsFile f : filesToBeRemovedFromDb) {
-            bitBackupContext.getFileRepository() -> remove(f);
-        }
+        // One transaction for the whole batch instead of a fresh DB connection
+        // + auto-commit (fsync) per deleted row.
+        bitBackupContext.getFileRepository()->removeAll(filesToBeRemovedFromDb);
         return filesToBeRemovedFromDb;
-    }
-
-    bool does_vector_contain(vector<FsFile> v, FsFile x) {
-        return std::find(v.begin(), v.end(), x)
-        != v.end();
     }
 
     std::string seconds_to_duration_string(long total_seconds) {
@@ -571,13 +571,22 @@ namespace BitBackup::Commands {
         //// Update modified files with same last modification date
         vector<FsFile> filesWithBitRot;
         vector<FsFile> filesToUpdateLastCheckDate;
+        vector<FsFile> filesToUpdate;
         int contentAndModTimeWereChanged = 0;
+
+        // O(1) membership test for files already scheduled for removal, instead of
+        // copying the whole vector and doing a linear full-field compare per file.
+        std::unordered_set<std::string> removedIds;
+        removedIds.reserve(filesToBeRemovedFromDb.size());
+        for (const auto& f : filesToBeRemovedFromDb) {
+            removedIds.insert(f.id);
+        }
 
         Core::ProgressTracker progressTracker = filesInDb.size() - filesToBeRemovedFromDb.size();
         progressTracker.start();
         for (FsFile fileInDb : filesInDb) {
             string absolutePathOfFileInDb = fileInDb.absolutePath;
-            if (does_vector_contain(filesToBeRemovedFromDb,fileInDb)) {
+            if (removedIds.count(fileInDb.id)) {
                 //nothing to do
                 continue;
 
@@ -608,7 +617,7 @@ namespace BitBackup::Commands {
                 filesWithBitRot.push_back(fileInDb);
                 fileInDb.lastCheckDate = print_clock(now);
                 fileInDb.lastCheckResult = "KO";
-                bitBackupContext.getFileRepository()->updateFile(fileInDb);
+                filesToUpdate.push_back(fileInDb);
                 continue;
             }
             if (lastModificationDateWasChanged) {
@@ -618,7 +627,7 @@ namespace BitBackup::Commands {
                 fileInDb.hashSumAlgorithm = "SHA-512";
                 fileInDb.size = std::filesystem::file_size(file);
                 fileInDb.lastCheckResult = "OK";
-                bitBackupContext.getFileRepository()->updateFile(fileInDb);
+                filesToUpdate.push_back(fileInDb);
                 //System.out.println(fileInDb.toString());
                 contentAndModTimeWereChanged++;
                 continue;
@@ -628,7 +637,7 @@ namespace BitBackup::Commands {
 
                 if (fileInDb.size == 0) {
                     fileInDb.size = std::filesystem::file_size(file);
-                    bitBackupContext.getFileRepository()->updateFile(fileInDb);
+                    filesToUpdate.push_back(fileInDb);
                 } else {
                     filesToUpdateLastCheckDate.push_back(fileInDb);
                 }
@@ -636,6 +645,10 @@ namespace BitBackup::Commands {
             }
 
         }
+
+        // Flush all per-file mutations (bit rot, modified, zero-size fixups) in a
+        // single transaction instead of one fsync per updated row.
+        bitBackupContext.getFileRepository()->updateAll(filesToUpdate);
         cout << "Part 8: Updating files - "
              << (filesWithBitRot.empty() ? "no" : "some")
              << " files with bit rots - content was changed and last modification is the same: "

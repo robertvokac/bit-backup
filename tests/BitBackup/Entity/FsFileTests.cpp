@@ -21,40 +21,29 @@
  * THE SOFTWARE.
  */
 
-#ifndef FILEREPOSITORY_H
-#define FILEREPOSITORY_H
-
-
+#include <gtest/gtest.h>
 #include "BitBackup/Entity/FsFile.h"
-#include <string>
-#include <vector>
 
+using BitBackup::Entity::FsFile;
 
-namespace BitBackup::Persistence::Api {
-
-    /**
-     *
-    *
-     */
-
-    class FileRepository {
-
-    public:
-        virtual ~FileRepository() = default;
-
-        virtual void create(const std::vector<Entity::FsFile>& files) = 0;
-        virtual std::vector<Entity::FsFile> list() = 0;
-        virtual void remove(const Entity::FsFile& file) = 0;
-        virtual void updateFile(Entity::FsFile& file) = 0;
-        virtual void updateLastCheckDate(std::string& lastCheckDate, std::vector<Entity::FsFile>& files) = 0;
-
-        // Batch variants: remove/update many rows inside a single transaction.
-        // Equivalent to calling remove()/updateFile() per element, but without
-        // a fsync (and a fresh DB connection) per row.
-        virtual void removeAll(const std::vector<Entity::FsFile>& files) = 0;
-        virtual void updateAll(const std::vector<Entity::FsFile>& files) = 0;
-
-    };
-
+namespace {
+FsFile sample() {
+    return FsFile{"id", "name.txt", "dir/name.txt", "2024-01-01 00:00:00.000",
+                  "2024-01-01 00:00:00.000", "hash", "SHA-512", 123, "OK"};
 }
-#endif // FILEREPOSITORY_H
+}
+
+TEST(FsFileTest, EqualWhenAllFieldsMatch) {
+    EXPECT_EQ(sample(), sample());
+}
+
+TEST(FsFileTest, NotEqualWhenAnyFieldDiffers) {
+    FsFile a = sample();
+    FsFile b = sample();
+    b.hashSumValue = "different";
+    EXPECT_FALSE(a == b);
+
+    FsFile c = sample();
+    c.lastCheckResult = "KO";
+    EXPECT_FALSE(a == c);
+}

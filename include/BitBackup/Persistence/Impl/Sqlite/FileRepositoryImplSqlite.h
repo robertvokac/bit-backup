@@ -32,8 +32,11 @@
 #include "BitBackup/Persistence/Api/FileRepository.h"
 #include "BitBackup/Persistence/Impl/Sqlite/SqliteConnectionFactory.h"
 #include "BitBackup/Entity/FsFile.h"
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace SQLite { class Database; }
 
 namespace BitBackup::Impl::Sqlite {
     using std::vector;
@@ -41,6 +44,11 @@ namespace BitBackup::Impl::Sqlite {
 
     private:
         Persistence::Impl::Sqlite::SqliteConnectionFactory* sqliteConnectionFactory;
+        // One connection reused for the whole repository lifetime. Opening a new
+        // SQLite::Database per call (as the old code did) is expensive and forced
+        // a fresh schema read on every single row operation.
+        std::unique_ptr<SQLite::Database> db;
+        SQLite::Database& database();
 
     public:
         FileRepositoryImplSqlite(Persistence::Impl::Sqlite::SqliteConnectionFactory* sqliteConnectionFactoryIn);
@@ -56,6 +64,9 @@ namespace BitBackup::Impl::Sqlite {
         void updateFile(Entity::FsFile& file) override;
 
     public: void updateLastCheckDate(std::string& lastCheckDate, vector<Entity::FsFile>& files) override;
+
+        void removeAll(const vector<Entity::FsFile>& files) override;
+        void updateAll(const vector<Entity::FsFile>& files) override;
     };
 }
 #endif // FILEREPOSITORYIMPLSQLITE_H

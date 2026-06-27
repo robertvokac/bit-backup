@@ -16,7 +16,10 @@ add_subdirectory(${CCPSQLITE_DIR})
 file(GLOB_RECURSE ALL_SOURCES "src/*.cpp")
 
 # Isolate main.cpp
-set(MAIN_SOURCE "src/BitBackup/Core/Main.cpp")
+# NOTE: GLOB_RECURSE yields absolute paths, so MAIN_SOURCE must be absolute too,
+# otherwise REMOVE_ITEM silently fails to match and Main.cpp (with its own main())
+# ends up inside bit_backup_core — which then hijacks main() when linking Tests.
+set(MAIN_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/BitBackup/Core/Main.cpp")
 
 # Remove main from library sources
 list(REMOVE_ITEM ALL_SOURCES ${MAIN_SOURCE})
@@ -49,21 +52,21 @@ target_include_directories(bit_backup PRIVATE
 )
 
 # ---- Tests ----
-#if (ENABLE_TESTS)
-#    add_subdirectory(vendor/googletest)
-#    enable_testing()
-#
-#    file(GLOB_RECURSE TEST_SOURCES "tests/*.cpp")
-#
-#    add_executable(Tests ${TEST_SOURCES})
-#
-#    target_include_directories(Tests PRIVATE
-#            ${CMAKE_CURRENT_SOURCE_DIR}/include
-#            ${CMAKE_CURRENT_SOURCE_DIR}/vendor/googletest/googletest/include
-#    )
-#
-#    target_link_libraries(Tests PRIVATE bit_backup_core gtest_main)
-#
-#    include(GoogleTest)
-#    gtest_discover_tests(Tests)
-#endif()
+if (ENABLE_TESTS)
+    add_subdirectory(vendor/googletest)
+    enable_testing()
+
+    file(GLOB_RECURSE TEST_SOURCES "tests/*.cpp")
+
+    add_executable(Tests ${TEST_SOURCES})
+
+    target_include_directories(Tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/vendor/googletest/googletest/include
+    )
+
+    target_link_libraries(Tests PRIVATE bit_backup_core gtest_main)
+
+    include(GoogleTest)
+    gtest_discover_tests(Tests)
+endif()

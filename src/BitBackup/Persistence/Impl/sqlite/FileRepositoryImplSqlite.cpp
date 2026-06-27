@@ -22,8 +22,10 @@
  */
 
 #include "BitBackup/Persistence/Impl/Sqlite/FileRepositoryImplSqlite.h"
+#include "BitBackup/Persistence/Api/Connection.h"
 
 #include <SQLiteCpp/SQLiteCpp.h>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -37,14 +39,28 @@ FileRepositoryImplSqlite::FileRepositoryImplSqlite(Persistence::Impl::Sqlite::Sq
 
 FileRepositoryImplSqlite::~FileRepositoryImplSqlite() = default;
 
+// Lazily open a single shared connection (after the schema migration has run)
+// and apply pragmas that make bulk writes fast without breaking the
+// self-integrity hash of the DB file (rollback journal is kept, so after each
+// commit the .bitbackup.sqlite3 file alone is complete and consistent).
+SQLite::Database& FileRepositoryImplSqlite::database() {
+    if (!db) {
+        std::unique_ptr<Persistence::Api::Connection> conn(
+            sqliteConnectionFactory->createConnection());
+        db = std::make_unique<SQLite::Database>(
+            conn->getName(),
+            SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE);
+        db->exec("PRAGMA synchronous = NORMAL");
+        db->exec("PRAGMA temp_store = MEMORY");
+    }
+    return *db;
+}
+
 // INSERT batch (stejně jako Java)
 void FileRepositoryImplSqlite::create(const vector<Entity::FsFile>& files) {
     if (files.empty()) return;
 
-    SQLite::Database db(
-        sqliteConnectionFactory->createConnection()->getName(),
-        SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
-    );
+    SQLite::Database& db = database();
     SQLite::Transaction txn(db);
 
     const char* sql =
@@ -77,10 +93,7 @@ void FileRepositoryImplSqlite::create(const vector<Entity::FsFile>& files) {
 vector<Entity::FsFile> FileRepositoryImplSqlite::list() {
     vector<Entity::FsFile> result;
 
-    SQLite::Database db(
-        sqliteConnectionFactory->createConnection()->getName(),
-        SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
-    );
+    SQLite::Database& db = database();
 
     const char* sql =
         "SELECT ID, NAME, ABSOLUTE_PATH, LAST_MODIFICATION_DATE, LAST_CHECK_DATE, "
@@ -107,10 +120,7 @@ vector<Entity::FsFile> FileRepositoryImplSqlite::list() {
 
 // DELETE BY ID (Java used ID deletion; CheckCommand in C++ calls remove(FsFile) - let's stick with ID)
 void FileRepositoryImplSqlite::remove(const Entity::FsFile& file) {
-    SQLite::Database db(
-        sqliteConnectionFactory->createConnection()->getName(),
-        SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
-    );
+    SQLite::Database& db = database();
     const char* sql = "DELETE FROM FILE WHERE ID=?";
     SQLite::Statement stmt(db, sql);
     stmt.bind(1, file.id);
@@ -119,10 +129,7 @@ void FileRepositoryImplSqlite::remove(const Entity::FsFile& file) {
 
 // UPDATE all mutable fields according to Java version (WHERE ID=?)
 void FileRepositoryImplSqlite::updateFile(Entity::FsFile& file) {
-    SQLite::Database db(
-        sqliteConnectionFactory->createConnection()->getName(),
-        SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
-    );
+    SQLite::Database& db = database();
 
     const char* sql =
         "UPDATE FILE SET "
@@ -146,14 +153,65 @@ void FileRepositoryImplSqlite::updateFile(Entity::FsFile& file) {
     stmt.exec();
 }
 
+// DELETE many rows by ID inside one transaction (one fsync for the whole batch).
+void FileRepositoryImplSqlite::removeAll(const vector<Entity::FsFile>& files) {
+    if (files.empty()) return;
+
+    SQLite::Database& db = database();
+    SQLite::Transaction txn(db);
+
+    SQLite::Statement stmt(db, "DELETE FROM FILE WHERE ID=?");
+    for (const auto& f : files) {
+        stmt.bind(1, f.id);
+        stmt.exec();
+        stmt.reset();
+        stmt.clearBindings();
+    }
+
+    txn.commit();
+}
+
+// UPDATE all mutable fields for many rows inside one transaction.
+// Same SQL/semantics as updateFile(), just batched.
+void FileRepositoryImplSqlite::updateAll(const vector<Entity::FsFile>& files) {
+    if (files.empty()) return;
+
+    SQLite::Database& db = database();
+    SQLite::Transaction txn(db);
+
+    const char* sql =
+        "UPDATE FILE SET "
+        "LAST_MODIFICATION_DATE=?, "
+        "LAST_CHECK_DATE=?, "
+        "HASH_SUM_VALUE=?, "
+        "HASH_SUM_ALGORITHM=?, "
+        "SIZE=?, "
+        "LAST_CHECK_RESULT=? "
+        "WHERE ID=?";
+
+    SQLite::Statement stmt(db, sql);
+    for (const auto& f : files) {
+        int i = 0;
+        stmt.bind(++i, f.lastModificationDate);
+        stmt.bind(++i, f.lastCheckDate);
+        stmt.bind(++i, f.hashSumValue);
+        stmt.bind(++i, f.hashSumAlgorithm);
+        stmt.bind(++i, static_cast<int64_t>(f.size));
+        stmt.bind(++i, f.lastCheckResult);
+        stmt.bind(++i, f.id);
+        stmt.exec();
+        stmt.reset();
+        stmt.clearBindings();
+    }
+
+    txn.commit();
+}
+
 // SELECT * (column order matches 1:1 with Java)
 void FileRepositoryImplSqlite::updateLastCheckDate(std::string& lastCheckDate, vector<Entity::FsFile>& files) {
     if (files.empty()) return;
 
-    SQLite::Database db(
-        sqliteConnectionFactory->createConnection()->getName(),
-        SQLite::OPEN_READWRITE | SQLite::OPEN_CREATE
-    );
+    SQLite::Database& db = database();
     SQLite::Transaction txn(db);
 
     // Simple iterative approach (SQLiteCpp doesn't support dynamic IN without string building)

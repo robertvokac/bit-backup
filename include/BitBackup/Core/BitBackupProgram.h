@@ -44,9 +44,9 @@ namespace BitBackup::Core {
 
 
 
-    public: void run(std::vector<std::string>& args);
+    public: int run(std::vector<std::string>& args);
 
-    public: void run(const BitBackupArgs& command);
+    public: int run(const BitBackupArgs& command);
     };
 }
 

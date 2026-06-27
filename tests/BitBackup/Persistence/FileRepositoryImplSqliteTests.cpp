@@ -124,6 +124,23 @@ TEST_F(FileRepositoryTest, CreateAndListRoundTrip) {
     EXPECT_EQ(m["sub/b.txt"].size, 22u);
 }
 
+TEST_F(FileRepositoryTest, LockedFlagRoundTrips) {
+    FsFile locked = makeFile("id-1", "a.txt", "h1", 1);
+    locked.locked = 1;
+    FsFile normal = makeFile("id-2", "b.txt", "h2", 2);   // locked defaults to 0
+    repo->create({locked, normal});
+
+    auto m = byPath(repo->list());
+    EXPECT_EQ(m["a.txt"].locked, 1);
+    EXPECT_EQ(m["b.txt"].locked, 0);
+
+    // updateAll persists the locked flag too.
+    FsFile unlock = m["a.txt"];
+    unlock.locked = 0;
+    repo->updateAll({unlock});
+    EXPECT_EQ(byPath(repo->list())["a.txt"].locked, 0);
+}
+
 TEST_F(FileRepositoryTest, EmptyBatchesAreNoOps) {
     // Must not throw or create rows.
     repo->create({});

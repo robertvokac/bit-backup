@@ -31,6 +31,8 @@
 #include "BitBackup/Core/BitBackupFiles.h"
 #include "BitBackup/Core/ListSet.h"
 #include <iostream>
+#include <unordered_set>
+#include <vector>
 
 namespace BitBackup::Commands {
     using std::string;
@@ -75,6 +77,21 @@ namespace BitBackup::Commands {
         unsigned numThreads = 1;
         bool quickMode = false;
         int scrubPercent = 100;
+
+        // Directories (relative to the working dir) that contain a .bitbackuplock
+        // marker; "" means the working dir root itself is locked. A file is locked
+        // when any of its ancestor directories is one of these.
+        std::unordered_set<std::string> lockRoots;
+        // Human-readable lock violations collected during a run (modified, added,
+        // or deleted files inside a locked subtree).
+        std::vector<std::string> lockViolations;
+        // IDs of DB rows whose file is gone from disk (normal deletions AND
+        // locked deletions that are kept). part8 must not try to hash these.
+        std::unordered_set<std::string> missingFromDiskIds;
+
+        static constexpr const char* BITBACKUPLOCK = ".bitbackuplock";
+
+        [[nodiscard]] bool isPathLocked(const std::string& relPath) const;
 
         void part1CheckDbHasExpectedHashSum(const Core::BitBackupFiles &bitBackupFiles) noexcept(false);
 

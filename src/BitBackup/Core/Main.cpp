@@ -41,7 +41,9 @@ namespace BitBackup::Core {
 
             try {
                 BitBackupProgram bitBackupProgram;
-                bitBackupProgram.run(args);
+                // Propagate the program's exit code: non-zero when `check` finds
+                // bit rot or lock violations.
+                return bitBackupProgram.run(args);
             } catch (const std::exception &ex) {
                 // Report any error cleanly instead of letting it escape main()
                 // and abort the process (SIGABRT). Colorize only on a terminal.
@@ -52,7 +54,6 @@ namespace BitBackup::Core {
                           << std::endl;
                 return 1;
             }
-            return 0;
         }
     };
 

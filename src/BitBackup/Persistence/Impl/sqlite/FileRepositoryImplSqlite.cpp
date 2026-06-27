@@ -65,8 +65,8 @@ void FileRepositoryImplSqlite::create(const vector<Entity::FsFile>& files) {
 
     const char* sql =
         "INSERT INTO FILE (ID, NAME, ABSOLUTE_PATH, LAST_MODIFICATION_DATE, LAST_CHECK_DATE, "
-        "HASH_SUM_VALUE, HASH_SUM_ALGORITHM, SIZE, LAST_CHECK_RESULT) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        "HASH_SUM_VALUE, HASH_SUM_ALGORITHM, SIZE, LAST_CHECK_RESULT, LOCKED) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
     SQLite::Statement stmt(db, sql);
 
@@ -81,6 +81,7 @@ void FileRepositoryImplSqlite::create(const vector<Entity::FsFile>& files) {
         stmt.bind(++i, f.hashSumAlgorithm);
         stmt.bind(++i, static_cast<int64_t>(f.size));
         stmt.bind(++i, f.lastCheckResult);
+        stmt.bind(++i, f.locked);
         stmt.exec();
         stmt.reset();
         stmt.clearBindings();
@@ -97,7 +98,7 @@ vector<Entity::FsFile> FileRepositoryImplSqlite::list() {
 
     const char* sql =
         "SELECT ID, NAME, ABSOLUTE_PATH, LAST_MODIFICATION_DATE, LAST_CHECK_DATE, "
-        "HASH_SUM_VALUE, HASH_SUM_ALGORITHM, SIZE, LAST_CHECK_RESULT "
+        "HASH_SUM_VALUE, HASH_SUM_ALGORITHM, SIZE, LAST_CHECK_RESULT, LOCKED "
         "FROM FILE";
 
     SQLite::Statement stmt(db, sql);
@@ -111,7 +112,8 @@ vector<Entity::FsFile> FileRepositoryImplSqlite::list() {
             stmt.getColumn(5).getString(),
             stmt.getColumn(6).getString(),
             static_cast<unsigned long>(stmt.getColumn(7).getInt64()),
-            stmt.getColumn(8).getString()
+            stmt.getColumn(8).getString(),
+            stmt.getColumn(9).getInt()
         };
         result.push_back(std::move(f));
     }
@@ -186,7 +188,8 @@ void FileRepositoryImplSqlite::updateAll(const vector<Entity::FsFile>& files) {
         "HASH_SUM_VALUE=?, "
         "HASH_SUM_ALGORITHM=?, "
         "SIZE=?, "
-        "LAST_CHECK_RESULT=? "
+        "LAST_CHECK_RESULT=?, "
+        "LOCKED=? "
         "WHERE ID=?";
 
     SQLite::Statement stmt(db, sql);
@@ -198,6 +201,7 @@ void FileRepositoryImplSqlite::updateAll(const vector<Entity::FsFile>& files) {
         stmt.bind(++i, f.hashSumAlgorithm);
         stmt.bind(++i, static_cast<int64_t>(f.size));
         stmt.bind(++i, f.lastCheckResult);
+        stmt.bind(++i, f.locked);
         stmt.bind(++i, f.id);
         stmt.exec();
         stmt.reset();
@@ -215,7 +219,7 @@ void FileRepositoryImplSqlite::updateLastCheckDate(std::string& lastCheckDate, v
     SQLite::Transaction txn(db);
 
     // Simple iterative approach (SQLiteCpp doesn't support dynamic IN without string building)
-    const char* sql = "UPDATE FILE SET LAST_CHECK_DATE=?, LAST_CHECK_RESULT='OK' WHERE ID=?";
+    const char* sql = "UPDATE FILE SET LAST_CHECK_DATE=?, LAST_CHECK_RESULT='OK', LOCKED=0 WHERE ID=?";
     SQLite::Statement stmt(db, sql);
 
     for (auto& f : files) {

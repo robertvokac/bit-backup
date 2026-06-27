@@ -49,6 +49,7 @@ namespace BitBackup::Core {
         addPattern("*.bitbackupreport.csv", false);
         addPattern("*.bitbackupindex.csv", false);
         addPattern("*.bitbackupignore", false);
+        addPattern("*.bitbackuplock", false);
         addBitBackupIgnoreFile(bitBackupIgnoreFile);
     }
 

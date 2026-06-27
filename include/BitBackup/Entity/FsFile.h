@@ -37,6 +37,8 @@ namespace BitBackup::Entity {
         std::string hashSumAlgorithm;
         unsigned long size;
         std::string lastCheckResult;
+        // 1 when this file lives under a .bitbackuplock'd directory (frozen).
+        int locked = 0;
 
         friend std::ostream& operator<<(std::ostream& os, const FsFile& file) {
             os << "FsFile{id: " << file.id
@@ -47,7 +49,8 @@ namespace BitBackup::Entity {
                << ", hashSumValue: " << file.hashSumValue
                << ", hashSumAlgorithm: " << file.hashSumAlgorithm
                << ", size: " << file.size
-               << ", lastCheckResult: " << file.lastCheckResult << "}";
+               << ", lastCheckResult: " << file.lastCheckResult
+               << ", locked: " << file.locked << "}";
             return os;
         }
 
@@ -61,7 +64,8 @@ namespace BitBackup::Entity {
                     this->hashSumValue == other.hashSumValue &&
                     this->hashSumAlgorithm == other.hashSumAlgorithm &&
                     this->size == other.size &&
-                    this->lastCheckResult == other.lastCheckResult;
+                    this->lastCheckResult == other.lastCheckResult &&
+                    this->locked == other.locked;
         }
     };
 

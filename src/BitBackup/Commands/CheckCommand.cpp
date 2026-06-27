@@ -64,6 +64,7 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#include <unistd.h>
 
 #include "BitBackup/Core/ProgressTracker.h"
 #include "BitBackup/Files/FileEntry.h"
@@ -174,45 +175,65 @@ namespace BitBackup::Commands {
         cout << "==========" << endl;
         cout << "Summary" << endl;
 
-        if (filesWithBitRot.empty()) {
-            cout << "Summary: OK : No files with bit rot were found." << std::endl;
-        } else {
-            std::cerr
-            << "Summary: KO : Some files "
-            << filesWithBitRot.size()
-            << " with bit rot were found." << std::endl;
-            for (FsFile f : filesWithBitRot) {
-                std::cerr
-                << "Bit rot detected: \""
-                << f.absolutePath
-                << "\""
-                << " expected_sha512="
-                << f.hashSumValue
-                <<" returned_sha512="
-                << Core::Utils::calculateSHA512Hash(File("./" + f.absolutePath))
-                << std::endl;
-            }
+        const bool problems = !filesWithBitRot.empty() || !lockViolations.empty();
+        const bool tty = isatty(fileno(stderr)) != 0;
+        const std::string RED = tty ? "\033[31m" : "";
+        const std::string RST = tty ? "\033[0m" : "";
 
+        if (!problems) {
+            cout << "Summary: OK : No files with bit rot and no lock violations were found." << std::endl;
+        } else {
+            if (!filesWithBitRot.empty()) {
+                std::cerr << RED
+                << "Summary: KO : " << filesWithBitRot.size()
+                << " file(s) with bit rot were found." << RST << std::endl;
+                for (const FsFile& f : filesWithBitRot) {
+                    std::cerr << RED
+                    << "Bit rot detected: \"" << f.absolutePath << "\""
+                    << " expected_sha512=" << f.hashSumValue
+                    << " returned_sha512="
+                    << Core::Utils::calculateSHA512Hash(File("./" + f.absolutePath))
+                    << RST << std::endl;
+                }
+            }
+            if (!lockViolations.empty()) {
+                std::cerr << RED
+                << "Summary: KO : " << lockViolations.size()
+                << " lock violation(s) in .bitbackuplock'd directories:" << RST << std::endl;
+                for (const std::string& v : lockViolations) {
+                    std::cerr << RED << "Lock violation: " << v << RST << std::endl;
+                }
+            }
         }
 
         cout << "foundFiles=" << foundFiles << std::endl;
         cout << "foundDirs=" << foundDirs << endl;
 
-        if (filesWithBitRot.empty()) {
+        // A non-empty result signals problems (drives a non-zero exit code):
+        // it aggregates both bit-rot paths and lock violations.
+        if (!problems) {
             return "";
         }
-        if (!filesWithBitRot.empty()) {
-            std::ostringstream oss;
-            for (size_t i = 0; i < filesWithBitRot.size(); ++i) {
-                oss << filesWithBitRot[i].absolutePath;
-                if (i != filesWithBitRot.size() - 1) {
-                    oss << "\n";
-                }
-            }
-            return oss.str();
+        std::ostringstream oss;
+        for (const FsFile& f : filesWithBitRot) {
+            oss << "bitrot: " << f.absolutePath << "\n";
         }
-        return "";
+        for (const std::string& v : lockViolations) {
+            oss << "lock: " << v << "\n";
+        }
+        return oss.str();
+    }
 
+    bool CheckCommand::isPathLocked(const std::string& relPath) const {
+        if (lockRoots.empty()) return false;
+        if (lockRoots.count("")) return true;            // whole working dir locked
+        // Check every ancestor directory of relPath.
+        std::size_t pos = 0;
+        while ((pos = relPath.find('/', pos)) != std::string::npos) {
+            if (lockRoots.count(relPath.substr(0, pos))) return true;
+            ++pos;
+        }
+        return false;
     }
 
     /**
@@ -331,6 +352,16 @@ namespace BitBackup::Commands {
 
             if (!std::filesystem::is_regular_file(e))
                 continue;
+
+            if (e.path().filename().string() == BITBACKUPLOCK) {
+                // This directory (and its subtree) is locked. Record it and do
+                // not track the marker file itself.
+                const auto slash = rel.find_last_of('/');
+                lockRoots.insert(slash == std::string::npos
+                                     ? std::string()
+                                     : rel.substr(0, slash));
+                continue;
+            }
 
             if (abs == dbAbs)
                 continue;
@@ -516,9 +547,15 @@ namespace BitBackup::Commands {
         vector<NewFile> missing;
         for (const File& fileInDir : filesInFileSystem.getList()) {
             string rel = loadPathButOnlyTheNeededPart(bitBackupFiles.workingDir, fileInDir);
-            if (!filesInDb.doesSetContain(rel)) {
-                missing.push_back({fileInDir, std::move(rel)});
+            if (filesInDb.doesSetContain(rel)) {
+                continue;
             }
+            if (isPathLocked(rel)) {
+                // Frozen subtree: a new file is a violation and is NOT added.
+                lockViolations.push_back("new file in locked directory: " + rel);
+                continue;
+            }
+            missing.push_back({fileInDir, std::move(rel)});
         }
 
         // 2. Hash the new files in parallel (the expensive part).
@@ -580,7 +617,14 @@ namespace BitBackup::Commands {
 
             string absolutePathOfFileInDb = fileInDb.absolutePath;
             if (!filesInFileSystem.doesSetContain(absolutePathOfFileInDb)) {
-
+                // Gone from disk: part8 must skip it (cannot be hashed).
+                missingFromDiskIds.insert(fileInDb.id);
+                // A file that was (or still is) inside a locked subtree must not
+                // be silently dropped from the DB - report it and keep the row.
+                if (fileInDb.locked == 1 || isPathLocked(absolutePathOfFileInDb)) {
+                    lockViolations.push_back("locked file deleted: " + absolutePathOfFileInDb);
+                    continue;
+                }
                 filesToBeRemovedFromDb.push_back(fileInDb);
             }
 
@@ -642,21 +686,15 @@ namespace BitBackup::Commands {
         vector<FsFile> filesToUpdate;
         int contentAndModTimeWereChanged = 0;
 
-        // O(1) membership test for files already scheduled for removal, instead of
-        // copying the whole vector and doing a linear full-field compare per file.
-        std::unordered_set<std::string> removedIds;
-        removedIds.reserve(filesToBeRemovedFromDb.size());
-        for (const auto& f : filesToBeRemovedFromDb) {
-            removedIds.insert(f.id);
-        }
-
-        // Build the work list of files that are still present (not scheduled for
-        // removal). Pointers stay valid: dbList is the ListSet's backing vector.
+        // Build the work list of files still present on disk. missingFromDiskIds
+        // (filled by part7) covers both normal deletions and locked deletions
+        // that are kept in the DB - neither can be hashed here. Pointers stay
+        // valid: dbList is the ListSet's backing vector.
         const auto& dbList = filesInDb.getList();
         vector<const FsFile*> work;
         work.reserve(dbList.size());
         for (const auto& f : dbList) {
-            if (!removedIds.count(f.id)) work.push_back(&f);
+            if (!missingFromDiskIds.count(f.id)) work.push_back(&f);
         }
 
         // Decide which unchanged-modtime files to re-hash this run:
@@ -684,6 +722,7 @@ namespace BitBackup::Commands {
             string lastModified;
             bool modtimeChanged = false;
             bool hashed = false;
+            bool locked = false;
             string hash;
             unsigned long size = 0;
         };
@@ -701,9 +740,11 @@ namespace BitBackup::Commands {
                 r.lastModified = last_modified_string(file);
                 r.modtimeChanged = r.lastModified != f.lastModificationDate;
                 r.size = static_cast<unsigned long>(std::filesystem::file_size(file));
+                r.locked = isPathLocked(f.absolutePath);
 
                 bool needsHash;
-                if (scrubPercent >= 100)      needsHash = true;   // full (default)
+                if (r.locked)                 needsHash = true;   // frozen -> always verify
+                else if (scrubPercent >= 100) needsHash = true;   // full (default)
                 else if (r.modtimeChanged)    needsHash = true;   // changed -> must rehash
                 else if (scrubPercent <= 0)   needsHash = false;  // quick
                 else                          needsHash = forceHash.count(work[i]) > 0;
@@ -735,6 +776,23 @@ namespace BitBackup::Commands {
             }
             FsFile fileInDb = *work[i];
 
+            if (r.locked) {
+                // Frozen subtree: never overwrite the stored mtime/hash/size -
+                // they are the source of truth. Report any drift as a violation.
+                const bool drift = r.modtimeChanged ||
+                                   (r.hashed && r.hash != fileInDb.hashSumValue);
+                fileInDb.lastCheckDate = nowStr;
+                fileInDb.locked = 1;
+                if (drift) {
+                    lockViolations.push_back("locked file modified: " + fileInDb.absolutePath);
+                    fileInDb.lastCheckResult = "KO";
+                } else {
+                    fileInDb.lastCheckResult = "OK";
+                }
+                filesToUpdate.push_back(fileInDb);  // writes back unchanged mtime/hash + LOCKED=1
+                continue;
+            }
+
             if (r.modtimeChanged) {
                 fileInDb.lastCheckDate = nowStr;
                 fileInDb.lastModificationDate = r.lastModified;
@@ -742,6 +800,7 @@ namespace BitBackup::Commands {
                 fileInDb.hashSumAlgorithm = "SHA-512";
                 fileInDb.size = r.size;
                 fileInDb.lastCheckResult = "OK";
+                fileInDb.locked = 0;
                 filesToUpdate.push_back(fileInDb);
                 contentAndModTimeWereChanged++;
             } else if (r.hashed) {
@@ -749,11 +808,13 @@ namespace BitBackup::Commands {
                     filesWithBitRot.push_back(fileInDb);
                     fileInDb.lastCheckDate = nowStr;
                     fileInDb.lastCheckResult = "KO";
+                    fileInDb.locked = 0;
                     filesToUpdate.push_back(fileInDb);
                 } else {
                     fileInDb.lastCheckResult = "OK";
                     if (fileInDb.size == 0) {
                         fileInDb.size = r.size;
+                        fileInDb.locked = 0;
                         filesToUpdate.push_back(fileInDb);
                     } else {
                         filesToUpdateLastCheckDate.push_back(fileInDb);
@@ -765,6 +826,7 @@ namespace BitBackup::Commands {
                 fileInDb.lastCheckResult = "OK";
                 if (fileInDb.size == 0) {
                     fileInDb.size = r.size;
+                    fileInDb.locked = 0;
                     filesToUpdate.push_back(fileInDb);
                 } else {
                     filesToUpdateLastCheckDate.push_back(fileInDb);

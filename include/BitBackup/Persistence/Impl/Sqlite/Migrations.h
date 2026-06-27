@@ -30,7 +30,7 @@
 
 
 namespace BitBackup::Persistence::Impl::Sqlite {
-    constexpr int MIGRATION_COUNT = 4;
+    constexpr int MIGRATION_COUNT = 5;
     inline std::string migrations[MIGRATION_COUNT] = {
         R"(CREATE TABLE "FILE" (
 	"ID" TEXT,
@@ -62,6 +62,10 @@ ON FILE (ABSOLUTE_PATH);
 )",
 
         R"(ALTER TABLE "FILE" ADD COLUMN LAST_CHECK_RESULT NUMBER
+
+)",
+
+        R"(ALTER TABLE "FILE" ADD COLUMN LOCKED NUMBER DEFAULT 0
 
 )",
     };

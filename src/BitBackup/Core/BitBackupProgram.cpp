@@ -42,12 +42,12 @@ namespace BitBackup::Core {
         commandImplementations.push_back(std::make_unique<Commands::VersionCommand>());
     }
 
-    void BitBackupProgram::run(std::vector<std::string> &args) {
+    int BitBackupProgram::run(std::vector<std::string> &args) {
         const BitBackupArgs bba(args);
-        run(bba);
+        return run(bba);
     }
 
-    void BitBackupProgram::run(const BitBackupArgs &command) {
+    int BitBackupProgram::run(const BitBackupArgs &command) {
         Command *foundCommand = nullptr;
         for (const auto &cmd: commandImplementations) {
             if (cmd->getName() == command.getCommand()) {
@@ -63,7 +63,15 @@ namespace BitBackup::Core {
             throw std::runtime_error("Invalid command!");
         }
 
-        foundCommand->run(command);
+        const std::string result = foundCommand->run(command);
+
+        // Only `check` signals problems (bit rot / lock violations) through a
+        // non-empty result -> non-zero exit. help/version return their text but
+        // are always success.
+        if (foundCommand->getName() == Commands::CheckCommand::NAME && !result.empty()) {
+            return 1;
+        }
+        return 0;
     }
 
 }

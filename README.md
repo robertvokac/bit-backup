@@ -95,8 +95,26 @@ build/
 ```
 
 bit-backup's own metadata files (`.bitbackup.sqlite3`, its `.sha512`,
-`.bitbackupignore`, `.bitbackupindex.csv`, `*.bitbackupreport.csv`) are always
-excluded automatically.
+`.bitbackupignore`, `.bitbackupindex.csv`, `*.bitbackupreport.csv`,
+`.bitbackuplock`) are always excluded automatically.
+
+### Locking Directories (`.bitbackuplock`)
+Drop an (empty) `.bitbackuplock` file into a directory to **freeze** that
+directory and everything below it. First index the files normally, then add the
+marker - the currently stored state becomes the source of truth.
+
+For a locked subtree bit-backup will:
+- **never overwrite** the stored modification time or hash of its files, and
+- **report a violation** (red text on a terminal, non-zero exit) for *any*
+  change: a modified file, a new file, or a deleted file.
+
+This is the opposite of the normal behavior, where a changed modification time
+is treated as a legitimate edit and absorbed into the database. Remove the
+marker to unlock the directory and resume normal updates.
+
+### Exit code
+`check` returns a non-zero exit code when it finds bit rot **or** a lock
+violation, so it can be used directly in scripts and cron jobs.
 
 ### Metadata Files
 The tool creates several hidden files in the target directory to manage its state:

@@ -66,6 +66,16 @@ namespace BitBackup::Commands {
         int foundDirs = 0;
         std::stringstream bitbackupindexSB;
 
+        // Resolved once at the start of run() from the CLI arguments:
+        //   threads=N   number of hashing worker threads (default: hw concurrency)
+        //   quick=true  skip re-hashing files whose modtime is unchanged
+        //               (fast, but does NOT detect silent bit rot)
+        //   scrub=N     re-hash only the oldest N% of unchanged-modtime files
+        //               this run (rotating coverage); 100 = full, 0 = quick
+        unsigned numThreads = 1;
+        bool quickMode = false;
+        int scrubPercent = 100;
+
         void part1CheckDbHasExpectedHashSum(const Core::BitBackupFiles &bitBackupFiles) noexcept(false);
 
         bool part2MigrateDbSchemaIfNeeded(Core::BitBackupFiles &bitBackupFiles);

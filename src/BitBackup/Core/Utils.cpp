@@ -47,6 +47,7 @@
 #include <iostream>
 #include <mutex>
 #include <random>
+#include <vector>
 
 #include "BitBackup/Core/BitBackupException.h"
 #include <openssl/sha.h> // Requires OpenSSL library for hashing
@@ -140,26 +141,28 @@ namespace BitBackup::Core {
                 SHA256_Init(&(sha_context.sha256Ctx));
             }
 
-            // Buffer for reading the file in chunks
-            char buffer[8192];
-            while (fileStream.read(buffer, sizeof(buffer))) {
+            // Read in large chunks (heap-allocated) to cut the number of read()
+            // syscalls on big files. 1 MiB is a good throughput/footprint tradeoff.
+            constexpr std::size_t bufferSize = 1u << 20; // 1 MiB
+            std::vector<char> buffer(bufferSize);
+            while (fileStream.read(buffer.data(), static_cast<std::streamsize>(bufferSize))) {
                 if (algorithm == SHA512) {
-                    SHA512_Update(&(sha_context.sha512Ctx), buffer, fileStream.gcount());
+                    SHA512_Update(&(sha_context.sha512Ctx), buffer.data(), fileStream.gcount());
                 }
 
                 if (algorithm == SHA256) {
-                    SHA256_Update(&(sha_context.sha256Ctx), buffer, fileStream.gcount());
+                    SHA256_Update(&(sha_context.sha256Ctx), buffer.data(), fileStream.gcount());
                 }
 
             }
             // Handle any remaining bytes at the end of the file
             if (fileStream.gcount() > 0) {
                 if (algorithm == SHA512) {
-                    SHA512_Update(&(sha_context.sha512Ctx), buffer, fileStream.gcount());
+                    SHA512_Update(&(sha_context.sha512Ctx), buffer.data(), fileStream.gcount());
                 }
 
                 if (algorithm == SHA256) {
-                    SHA256_Update(&(sha_context.sha256Ctx), buffer, fileStream.gcount());
+                    SHA256_Update(&(sha_context.sha256Ctx), buffer.data(), fileStream.gcount());
                 }
 
             }

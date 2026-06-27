@@ -56,6 +56,18 @@ The primary command is `check`, which scans the specified directory and updates 
 | `report` | Set to `true` to generate a report file (`.bitbackupreport.csv`). | `false` |
 | `verbose`| Set to `true` to show detailed scan information. | `false` |
 | `bitbackupindex` | Set to `true` to generate a full file index (`.bitbackupindex.csv`). | `false` |
+| `threads` | Number of worker threads used for hashing. | CPU cores |
+| `quick`  | `true` skips re-hashing files whose modification time is unchanged. Fast, but does **not** detect silent bit rot. | `false` |
+| `scrub`  | Re-hash only the oldest `N`% of unchanged-modtime files this run (rotating coverage, like a scrub). `100` = full check, `0` = same as `quick`. | `100` |
+
+> Note: options must follow the explicit `check` command, e.g. `bit_backup check quick=true threads=8`.
+
+### Performance
+Hashing runs in parallel across `threads` workers, and all database
+inserts/updates/deletes are batched into single transactions. For routine
+runs over very large trees, `quick=true` (skip unchanged files) or
+`scrub=N` (verify a rotating slice each run) keep wall-clock bounded while
+`scrub` still eventually re-verifies everything.
 
 ### Excluding Files (`.bitbackupignore`)
 Create a file named `.bitbackupignore` in the root of your scanned directory. You can use wildcards:

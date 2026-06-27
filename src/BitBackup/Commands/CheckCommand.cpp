@@ -59,6 +59,9 @@
 #include <ctime>
 #include <random>
 #include <algorithm>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -78,6 +81,43 @@ namespace BitBackup::Core {
 namespace BitBackup::Commands {
     using std::string;
 
+    namespace {
+        // Run fn(i) for i in [0, count) across `threads` worker threads.
+        // fn MUST be thread-safe and only touch per-index state. threads<=1 runs
+        // sequentially (and reproduces the old single-threaded behavior exactly).
+        template <typename Fn>
+        void parallelFor(std::size_t count, unsigned threads, Fn&& fn) {
+            if (count == 0) return;
+            if (threads <= 1) {
+                for (std::size_t i = 0; i < count; ++i) fn(i);
+                return;
+            }
+            std::atomic<std::size_t> next{0};
+            auto worker = [&] {
+                std::size_t i;
+                while ((i = next.fetch_add(1, std::memory_order_relaxed)) < count) {
+                    fn(i);
+                }
+            };
+            const unsigned n = static_cast<unsigned>(std::min<std::size_t>(threads, count));
+            std::vector<std::thread> pool;
+            pool.reserve(n);
+            for (unsigned t = 0; t < n; ++t) pool.emplace_back(worker);
+            for (auto& th : pool) th.join();
+        }
+
+        unsigned resolveThreadCount(const Core::BitBackupArgs& args) {
+            if (args.hasArgument("threads")) {
+                try {
+                    const int t = std::stoi(args.getArgument("threads"));
+                    if (t >= 1) return static_cast<unsigned>(std::min(t, 256));
+                } catch (...) { /* fall through to default */ }
+            }
+            const unsigned hc = std::thread::hardware_concurrency();
+            return hc == 0 ? 4u : hc;
+        }
+    }
+
     CheckCommand::CheckCommand() = default;
 
     string CheckCommand::getName() const {
@@ -89,6 +129,20 @@ namespace BitBackup::Commands {
     string CheckCommand::run(const Core::BitBackupArgs &bitBackupArgs) {
         Core::BitBackupFiles bitBackupFiles(bitBackupArgs);
         Core::BitBackupContext bitBackupContext(bitBackupFiles.workingDirAbsolutePath);
+
+        // Resolve performance/scan options once.
+        numThreads = resolveThreadCount(bitBackupArgs);
+        quickMode = bitBackupArgs.hasArgument("quick") && bitBackupArgs.getArgument("quick") == "true";
+        scrubPercent = 100;
+        if (bitBackupArgs.hasArgument("scrub")) {
+            try {
+                scrubPercent = std::clamp(std::stoi(bitBackupArgs.getArgument("scrub")), 0, 100);
+            } catch (...) { scrubPercent = 100; }
+        }
+        if (quickMode) scrubPercent = 0; // quick == scrub 0%
+        cout << "Options: threads=" << numThreads
+             << " quick=" << (quickMode ? "true" : "false")
+             << " scrub=" << scrubPercent << "%" << std::endl;
         //
         //part 1:
         part1CheckDbHasExpectedHashSum(bitBackupFiles);
@@ -375,7 +429,8 @@ namespace BitBackup::Commands {
         auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration) % 1000;
 
         std::stringstream ss;
-        ss << std::put_time(std::localtime(&timet), "%Y-%m-%d %H:%M:%S");
+        std::tm tmBuf{};
+        ss << std::put_time(localtime_r(&timet, &tmBuf), "%Y-%m-%d %H:%M:%S");
         ss << '.' << std::setfill('0') << std::setw(3) << milliseconds.count();
         return ss.str();
     }
@@ -385,7 +440,8 @@ namespace BitBackup::Commands {
         auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration) % 1000;
 
         std::stringstream ss;
-        ss << std::put_time(std::localtime(&timet), "%Y%m%d%H%M%S");
+        std::tm tmBuf{};
+        ss << std::put_time(localtime_r(&timet, &tmBuf), "%Y%m%d%H%M%S");
         ss << std::setfill('0') << std::setw(3) << milliseconds.count();
         return ss.str();
     }
@@ -412,7 +468,8 @@ namespace BitBackup::Commands {
                 sctp.time_since_epoch()
             ) % 1000;
 
-            std::tm tm = *std::localtime(&tt);
+            std::tm tm{};
+            localtime_r(&tt, &tm);
 
             std::stringstream ss;
             ss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S.");
@@ -440,44 +497,45 @@ namespace BitBackup::Commands {
         << std::endl;
 
         tp now = std::chrono::system_clock::now();
+        const string nowStr = print_clock(now);
 
-        int processedCount0 = 0;
-        vector<Entity::FsFile> filesMissingInDb;
+        // 1. Find files missing in the DB (cheap set lookups, single-threaded).
+        struct NewFile { File path; string rel; };
+        vector<NewFile> missing;
         for (const File& fileInDir : filesInFileSystem.getList()) {
-            ++processedCount0;
-            if (processedCount0 % 100 == 0) {
-                const double progress = static_cast<double>(processedCount0) / filesInFileSystem.getList().size() * 100;
-                cout
-                << "Part "
-                << CheckCommandPart::ADD_NEW_FILES_TO_DB
-                << ": Add - Progress: "
-                << processedCount0
-                <<"/"
-                << filesInFileSystem.getList().size()
-                << " " << " "
-                << std::fixed << std::setprecision(2)
-                << progress
-                << " %" << std::endl;
+            string rel = loadPathButOnlyTheNeededPart(bitBackupFiles.workingDir, fileInDir);
+            if (!filesInDb.doesSetContain(rel)) {
+                missing.push_back({fileInDir, std::move(rel)});
             }
-
-            string absolutePathOfFileInDir = loadPathButOnlyTheNeededPart(bitBackupFiles.workingDir, fileInDir);
-            if (!filesInDb.doesSetContain(absolutePathOfFileInDir)) {
-
-                Entity::FsFile fsFile = {
-                    Core::Utils::generateUUIDv4(),
-                        fileInDir.filename().string(),
-                        absolutePathOfFileInDir,
-                        last_modified_string(fileInDir),
-                        print_clock(now),
-                        BitBackup::Core::Utils::calculateSHA512Hash(fileInDir),
-                        "SHA-512",
-                        std::filesystem::file_size(fileInDir),
-                        "OK"
-                };
-                filesMissingInDb.push_back(fsFile);
-            }
-
         }
+
+        // 2. Hash the new files in parallel (the expensive part).
+        vector<Entity::FsFile> filesMissingInDb(missing.size());
+        std::mutex errMtx;
+        string firstError;
+        parallelFor(missing.size(), numThreads, [&](std::size_t i) {
+            const NewFile& m = missing[i];
+            try {
+                filesMissingInDb[i] = Entity::FsFile{
+                    Core::Utils::generateUUIDv4(),
+                    m.path.filename().string(),
+                    m.rel,
+                    last_modified_string(m.path),
+                    nowStr,
+                    Core::Utils::calculateSHA512Hash(m.path),
+                    "SHA-512",
+                    std::filesystem::file_size(m.path),
+                    "OK"
+                };
+            } catch (const std::exception& e) {
+                std::lock_guard<std::mutex> lk(errMtx);
+                if (firstError.empty()) firstError = e.what();
+            }
+        });
+        if (!firstError.empty()) {
+            throw Core::BitBackupException("Part 6 hashing failed: " + firstError);
+        }
+
         cout << "Adding new files: " << filesMissingInDb.size() << std::endl;
         bitBackupContext.getFileRepository()->create(filesMissingInDb);
         return now;
@@ -566,8 +624,6 @@ namespace BitBackup::Commands {
         cout << "** Part "
         << CheckCommandPart::COMPARE_CONTENT_AND_LAST_MODTIME
         << ": Comparing Content and last modification date" << std::endl;
-        double countOfFilesToCalculateHashSum = filesInDb.size() - filesToBeRemovedFromDb.size();
-        int processedCount = 0;
         //// Update modified files with same last modification date
         vector<FsFile> filesWithBitRot;
         vector<FsFile> filesToUpdateLastCheckDate;
@@ -582,68 +638,126 @@ namespace BitBackup::Commands {
             removedIds.insert(f.id);
         }
 
-        Core::ProgressTracker progressTracker = filesInDb.size() - filesToBeRemovedFromDb.size();
-        progressTracker.start();
-        for (FsFile fileInDb : filesInDb) {
-            string absolutePathOfFileInDb = fileInDb.absolutePath;
-            if (removedIds.count(fileInDb.id)) {
-                //nothing to do
-                continue;
+        // Build the work list of files that are still present (not scheduled for
+        // removal). Pointers stay valid: dbList is the ListSet's backing vector.
+        const auto& dbList = filesInDb.getList();
+        vector<const FsFile*> work;
+        work.reserve(dbList.size());
+        for (const auto& f : dbList) {
+            if (!removedIds.count(f.id)) work.push_back(&f);
+        }
 
+        // Decide which unchanged-modtime files to re-hash this run:
+        //   scrubPercent==100 -> all (full bit-rot check, the default)
+        //   scrubPercent==0   -> none (quick mode)
+        //   else              -> the oldest scrubPercent% by stored last-check date
+        std::unordered_set<const FsFile*> forceHash;
+        if (scrubPercent > 0 && scrubPercent < 100) {
+            vector<const FsFile*> byAge = work;
+            std::sort(byAge.begin(), byAge.end(),
+                      [](const FsFile* a, const FsFile* b) {
+                          return a->lastCheckDate < b->lastCheckDate;
+                      });
+            const std::size_t scrubCount =
+                static_cast<std::size_t>(byAge.size() * (scrubPercent / 100.0));
+            for (std::size_t i = 0; i < scrubCount; ++i) forceHash.insert(byAge[i]);
+        }
+
+        const string workingDir = bitBackupContext.getWorkingDirectory();
+        const string nowStr = print_clock(now);
+
+        struct ScanResult {
+            bool ok = true;
+            string err;
+            string lastModified;
+            bool modtimeChanged = false;
+            bool hashed = false;
+            string hash;
+            unsigned long size = 0;
+        };
+        vector<ScanResult> results(work.size());
+
+        // Parallel phase: the stat + (conditional) SHA-512 of every file. This is
+        // the dominant cost of a check and is independent per file.
+        std::atomic<std::size_t> hashedSoFar{0};
+        std::mutex progressMtx;
+        parallelFor(work.size(), numThreads, [&](std::size_t i) {
+            const FsFile& f = *work[i];
+            ScanResult r;
+            try {
+                File file(workingDir + "/" + f.absolutePath);
+                r.lastModified = last_modified_string(file);
+                r.modtimeChanged = r.lastModified != f.lastModificationDate;
+                r.size = static_cast<unsigned long>(std::filesystem::file_size(file));
+
+                bool needsHash;
+                if (scrubPercent >= 100)      needsHash = true;   // full (default)
+                else if (r.modtimeChanged)    needsHash = true;   // changed -> must rehash
+                else if (scrubPercent <= 0)   needsHash = false;  // quick
+                else                          needsHash = forceHash.count(work[i]) > 0;
+
+                if (needsHash) {
+                    r.hash = Core::Utils::calculateSHA512Hash(file);
+                    r.hashed = true;
+                    const std::size_t d = hashedSoFar.fetch_add(1) + 1;
+                    if (d % 2000 == 0) {
+                        std::lock_guard<std::mutex> lk(progressMtx);
+                        cout << "Update - hashed " << d << " files" << std::endl;
+                    }
+                }
+            } catch (const std::exception& e) {
+                r.ok = false;
+                r.err = e.what();
             }
-            progressTracker.nextDone();
-            processedCount = processedCount + 1;
+            results[i] = std::move(r);
+        });
 
-            long remaining_seconds = progressTracker.getRemainingSecondsUntilEnd();
-            if (processedCount % 100 == 0) {
-                double progress = ((double) processedCount) / countOfFilesToCalculateHashSum * 100;
-                cout
-                << "Update - Progress: " << processedCount << "/" << countOfFilesToCalculateHashSum << " "
-                << std::fixed << std::setprecision(2)
-                << progress
-                <<"%" << std::endl;
-                cout
-                << "Remains: "
-                << seconds_to_duration_string(remaining_seconds) << std::endl;
+        // Single-threaded reduce: identical classification and ordering as the old
+        // sequential loop, only the hashing was moved off the critical path. When
+        // scrubPercent==100 (the default) every file is hashed, so this reproduces
+        // the original behavior exactly.
+        for (std::size_t i = 0; i < work.size(); ++i) {
+            const ScanResult& r = results[i];
+            if (!r.ok) {
+                throw Core::BitBackupException("Part 8 hashing failed: " + r.err);
             }
-            File file ( bitBackupContext.getWorkingDirectory() + "/" +  absolutePathOfFileInDb);
+            FsFile fileInDb = *work[i];
 
-            auto lastModifiedString = last_modified_string(file);
-
-            string calculatedHash = Core::Utils::calculateSHA512Hash(file);
-            bool lastModificationDateWasChanged = lastModifiedString != fileInDb.lastModificationDate;
-
-            if (!lastModificationDateWasChanged && calculatedHash != fileInDb.hashSumValue) {
-                filesWithBitRot.push_back(fileInDb);
-                fileInDb.lastCheckDate = print_clock(now);
-                fileInDb.lastCheckResult = "KO";
-                filesToUpdate.push_back(fileInDb);
-                continue;
-            }
-            if (lastModificationDateWasChanged) {
-                fileInDb.lastCheckDate = print_clock(now);
-                fileInDb.lastModificationDate = lastModifiedString;
-                fileInDb.hashSumValue = calculatedHash;
+            if (r.modtimeChanged) {
+                fileInDb.lastCheckDate = nowStr;
+                fileInDb.lastModificationDate = r.lastModified;
+                fileInDb.hashSumValue = r.hash;
                 fileInDb.hashSumAlgorithm = "SHA-512";
-                fileInDb.size = std::filesystem::file_size(file);
+                fileInDb.size = r.size;
                 fileInDb.lastCheckResult = "OK";
                 filesToUpdate.push_back(fileInDb);
-                //System.out.println(fileInDb.toString());
                 contentAndModTimeWereChanged++;
-                continue;
-            }
-            if (!lastModificationDateWasChanged) {
+            } else if (r.hashed) {
+                if (r.hash != fileInDb.hashSumValue) {
+                    filesWithBitRot.push_back(fileInDb);
+                    fileInDb.lastCheckDate = nowStr;
+                    fileInDb.lastCheckResult = "KO";
+                    filesToUpdate.push_back(fileInDb);
+                } else {
+                    fileInDb.lastCheckResult = "OK";
+                    if (fileInDb.size == 0) {
+                        fileInDb.size = r.size;
+                        filesToUpdate.push_back(fileInDb);
+                    } else {
+                        filesToUpdateLastCheckDate.push_back(fileInDb);
+                    }
+                }
+            } else {
+                // Hash skipped (quick mode / not in this run's scrub subset):
+                // modtime unchanged, so assume OK without a bit-rot check.
                 fileInDb.lastCheckResult = "OK";
-
                 if (fileInDb.size == 0) {
-                    fileInDb.size = std::filesystem::file_size(file);
+                    fileInDb.size = r.size;
                     filesToUpdate.push_back(fileInDb);
                 } else {
                     filesToUpdateLastCheckDate.push_back(fileInDb);
                 }
-                continue;
             }
-
         }
 
         // Flush all per-file mutations (bit rot, modified, zero-size fixups) in a

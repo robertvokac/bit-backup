@@ -24,13 +24,31 @@
 #include "BitBackup/Core/BitBackupIgnoreRegex.h"
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include "BitBackup/Core/Utils.h"
 #include <string>
 
 namespace BitBackup::Core {
 
+    namespace {
+        // Strip a trailing CR (so CRLF-edited ignore files work) and trailing
+        // horizontal whitespace, mirroring .gitignore's handling of trailing
+        // spaces. Without this, "*.log\r" never matches anything.
+        std::string rstripPattern(std::string s) {
+            while (!s.empty() && (s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) {
+                s.pop_back();
+            }
+            return s;
+        }
+    }
+
     BitBackupIgnoreRegex::BitBackupIgnoreRegex(const std::filesystem::path& bitBackupIgnoreFile) {
-        patterns.push_back(convertUnixRegexToCppRegex("*.bitbackupreport.csv"));
+        // Always ignore bit-backup's own metadata files so they never get
+        // tracked as regular content (the .sqlite3 / .sha512 files are skipped
+        // separately in the scan).
+        addPattern("*.bitbackupreport.csv");
+        addPattern("*.bitbackupindex.csv");
+        addPattern("*.bitbackupignore");
         addBitBackupIgnoreFile(bitBackupIgnoreFile);
     }
 
@@ -60,27 +78,36 @@ namespace BitBackup::Core {
             }
         }
 
-        for (const auto& line : lines) {
+        for (const auto& raw : lines) {
+            std::string line = rstripPattern(raw);
             if (line.empty() || line[0] == '#') {
                 continue;  // Skip comments and empty lines
             }
-            std::string pattern = addPrefix + line;
-            patterns.push_back(convertUnixRegexToCppRegex(pattern));
+            // A leading '/' anchors the pattern to the ignore file's directory.
+            // The scan tests paths relative to the working dir WITHOUT a leading
+            // slash (e.g. "logs/a.log"), so drop it - otherwise the documented
+            // "/logs/*" style patterns could never match anything.
+            if (line.front() == '/') {
+                line.erase(0, 1);
+            }
+            addPattern(addPrefix + line);
         }
     }
 
+    void BitBackupIgnoreRegex::addPattern(const std::string& unixWildcard) {
+        patterns.emplace_back(convertUnixRegexToCppRegex(unixWildcard),
+                              std::regex_constants::ECMAScript);
+    }
+
     bool BitBackupIgnoreRegex::test(const std::string& text) const {
-        if (patterns.empty()) {
-            return false;  // Nothing to check
-        }
-        for (const auto& pattern : patterns) {
-            if (std::regex_match(text, std::regex(pattern, std::regex_constants::ECMAScript))) {
-                std::cout << "ignoring file: " << text << std::endl;
+        for (const auto& re : patterns) {
+            if (std::regex_match(text, re)) {
+                if (verbose) {
+                    std::cout << "ignoring file: " << text << std::endl;
+                }
                 return true;  // Match found, ignore the file
             }
         }
-
-        //std::cout << "accepting file: " << text << std::endl;
         return false;
     }
 
@@ -105,6 +132,7 @@ namespace BitBackup::Core {
                 case '{':
                 case '}':
                 case '|':
+                case '+':
                 case '\\':
                     result += "\\";
                     result += c;

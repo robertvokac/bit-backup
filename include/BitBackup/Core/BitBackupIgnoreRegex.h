@@ -41,8 +41,17 @@ namespace BitBackup::Core {
 
         [[nodiscard]] bool test(const std::string &text) const;
 
+        // When false (default) test() does not print per-file "ignoring file"
+        // lines; enable only for verbose runs.
+        void setVerbose(bool v) { verbose = v; }
+
     private:
-        std::vector<std::string> patterns;
+        // Patterns are compiled ONCE here instead of being recompiled on every
+        // test() call (the old code rebuilt a std::regex per pattern per file).
+        std::vector<std::regex> patterns;
+        bool verbose = false;
+
+        void addPattern(const std::string &unixWildcard);
 
         static std::string convertUnixRegexToCppRegex(const std::string &wildcard);
     };

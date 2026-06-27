@@ -55,6 +55,7 @@ namespace BitBackup::Core {
             bitbackupindex = workingDir / ".bitbackupindex.csv";
 
             bitBackupIgnoreRegex = std::make_shared<BitBackupIgnoreRegex>(bitBackupIgnore);
+            bitBackupIgnoreRegex->setVerbose(args.isVerboseLoggingEnabled());
         }
     };
 }

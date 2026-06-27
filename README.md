@@ -70,16 +70,33 @@ runs over very large trees, `quick=true` (skip unchanged files) or
 `scrub` still eventually re-verifies everything.
 
 ### Excluding Files (`.bitbackupignore`)
-Create a file named `.bitbackupignore` in the root of your scanned directory. You can use wildcards:
-```ignore
-# Ignore specific folders
-/logs/*
-/tmp/*
+Create a file named `.bitbackupignore` in the root of your scanned directory.
+Patterns use shell-style wildcards with a few gitignore-like conventions:
 
-# Ignore specific file types
+- `*` matches any run of characters, `?` matches a single character.
+- A leading `/` anchors the pattern to the scanned root (`/logs/*` matches
+  `logs/...` but not `src/logs/...`).
+- A trailing `/` marks a directory: `build/` ignores everything under `build`.
+- A leading `!` re-includes a previously ignored path (`!keep.log`).
+- Lines starting with `#` are comments; blank lines are ignored.
+
+```ignore
+# Ignore whole directories (their contents are skipped without descending)
+/logs/
+/node_modules/
+build/
+
+# Ignore specific file types (at any depth)
 *.tmp
 *.log
+
+# ...but keep one important log
+!important.log
 ```
+
+bit-backup's own metadata files (`.bitbackup.sqlite3`, its `.sha512`,
+`.bitbackupignore`, `.bitbackupindex.csv`, `*.bitbackupreport.csv`) are always
+excluded automatically.
 
 ### Metadata Files
 The tool creates several hidden files in the target directory to manage its state:

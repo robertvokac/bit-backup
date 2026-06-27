@@ -46,9 +46,9 @@ namespace BitBackup::Core {
         // Always ignore bit-backup's own metadata files so they never get
         // tracked as regular content (the .sqlite3 / .sha512 files are skipped
         // separately in the scan).
-        addPattern("*.bitbackupreport.csv");
-        addPattern("*.bitbackupindex.csv");
-        addPattern("*.bitbackupignore");
+        addPattern("*.bitbackupreport.csv", false);
+        addPattern("*.bitbackupindex.csv", false);
+        addPattern("*.bitbackupignore", false);
         addBitBackupIgnoreFile(bitBackupIgnoreFile);
     }
 
@@ -83,33 +83,53 @@ namespace BitBackup::Core {
             if (line.empty() || line[0] == '#') {
                 continue;  // Skip comments and empty lines
             }
+            // A leading '!' negates: re-include something matched earlier.
+            bool negated = false;
+            if (line.front() == '!') {
+                negated = true;
+                line.erase(0, 1);
+                if (line.empty()) continue;
+            }
             // A leading '/' anchors the pattern to the ignore file's directory.
             // The scan tests paths relative to the working dir WITHOUT a leading
             // slash (e.g. "logs/a.log"), so drop it - otherwise the documented
             // "/logs/*" style patterns could never match anything.
             if (line.front() == '/') {
                 line.erase(0, 1);
+                if (line.empty()) continue;
             }
-            addPattern(addPrefix + line);
+            // A trailing '/' marks a directory: match everything under it
+            // ("build/" -> "build/*"). A plain file named "build" is unaffected.
+            if (line.back() == '/') {
+                line += "*";
+            }
+            addPattern(addPrefix + line, negated);
         }
     }
 
-    void BitBackupIgnoreRegex::addPattern(const std::string& unixWildcard) {
-        patterns.emplace_back(convertUnixRegexToCppRegex(unixWildcard),
-                              std::regex_constants::ECMAScript);
+    void BitBackupIgnoreRegex::addPattern(const std::string& unixWildcard, bool negated) {
+        patterns.push_back(IgnorePattern{
+            std::regex(convertUnixRegexToCppRegex(unixWildcard),
+                       std::regex_constants::ECMAScript),
+            negated
+        });
+        if (negated) hasNegation = true;
     }
 
-    bool BitBackupIgnoreRegex::matchesAny(const std::string& text) const {
-        for (const auto& re : patterns) {
-            if (std::regex_match(text, re)) {
-                return true;
+    bool BitBackupIgnoreRegex::isIgnored(const std::string& text) const {
+        // Last matching pattern wins, so a later '!pattern' can re-include a
+        // path ignored by an earlier rule (gitignore semantics).
+        bool ignored = false;
+        for (const auto& p : patterns) {
+            if (std::regex_match(text, p.regex)) {
+                ignored = !p.negated;
             }
         }
-        return false;
+        return ignored;
     }
 
     bool BitBackupIgnoreRegex::test(const std::string& text) const {
-        if (matchesAny(text)) {
+        if (isIgnored(text)) {
             if (verbose) {
                 std::cout << "ignoring file: " << text << std::endl;
             }
@@ -119,6 +139,11 @@ namespace BitBackup::Core {
     }
 
     bool BitBackupIgnoreRegex::matchesDirectoryContents(const std::string& dirRelPath) const {
+        // A '!' rule could re-include a file inside an otherwise-ignored
+        // directory, so never prune when negation patterns are present.
+        if (hasNegation) {
+            return false;
+        }
         // Probe with an arbitrary deep child path. If some pattern matches it,
         // that pattern absorbs the whole subtree (it ended in a wildcard), so
         // every real child is ignored too and the directory can be pruned. A
@@ -126,7 +151,7 @@ namespace BitBackup::Core {
         // probe, so we conservatively keep descending in that case.
         static const std::string probe =
             "/\x01__bitbackup_probe__\x01/\x01child\x01";
-        return matchesAny(dirRelPath + probe);
+        return isIgnored(dirRelPath + probe);
     }
 
     std::string BitBackupIgnoreRegex::convertUnixRegexToCppRegex(const std::string& wildcard) {

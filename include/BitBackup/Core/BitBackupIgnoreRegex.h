@@ -51,16 +51,25 @@ namespace BitBackup::Core {
         void setVerbose(bool v) { verbose = v; }
 
     private:
+        // A pattern plus whether it re-includes (a leading '!' negation).
+        struct IgnorePattern {
+            std::regex regex;
+            bool negated;
+        };
+
         // Patterns are compiled ONCE here instead of being recompiled on every
         // test() call (the old code rebuilt a std::regex per pattern per file).
-        std::vector<std::regex> patterns;
+        // Evaluated in order, last match wins (so '!' can re-include).
+        std::vector<IgnorePattern> patterns;
+        bool hasNegation = false;
         bool verbose = false;
 
-        // Match without the verbose side effect (used by both test() and the
-        // directory-pruning probe).
-        [[nodiscard]] bool matchesAny(const std::string &text) const;
+        // Whether `text` ends up ignored after applying all patterns in order
+        // (last match wins). No verbose side effect; used by test() and the
+        // directory-pruning probe.
+        [[nodiscard]] bool isIgnored(const std::string &text) const;
 
-        void addPattern(const std::string &unixWildcard);
+        void addPattern(const std::string &unixWildcard, bool negated);
 
         static std::string convertUnixRegexToCppRegex(const std::string &wildcard);
     };

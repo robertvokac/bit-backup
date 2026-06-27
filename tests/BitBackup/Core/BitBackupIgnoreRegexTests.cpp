@@ -133,3 +133,33 @@ TEST(BitBackupIgnoreRegexTest, NestedDirectoryPrune) {
     EXPECT_FALSE(re.matchesDirectoryContents("logs"));      // logs/other must be kept
     EXPECT_TRUE(re.matchesDirectoryContents("logs/keep"));  // whole keep subtree ignored
 }
+
+TEST(BitBackupIgnoreRegexTest, NegationReincludes) {
+    // ignore all .log, but keep important.log
+    BitBackupIgnoreRegex re(writeIgnore("neg", "*.log\n!important.log\n"));
+    EXPECT_TRUE(re.test("server.log"));
+    EXPECT_FALSE(re.test("important.log"));   // re-included
+}
+
+TEST(BitBackupIgnoreRegexTest, NegationIsOrderSensitiveLastWins) {
+    // re-include then ignore again -> ignored
+    BitBackupIgnoreRegex re(writeIgnore("negorder", "*.log\n!keep.log\nkeep.log\n"));
+    EXPECT_TRUE(re.test("keep.log"));
+}
+
+TEST(BitBackupIgnoreRegexTest, TrailingSlashIgnoresDirectoryContents) {
+    BitBackupIgnoreRegex re(writeIgnore("trailing", "build/\n"));
+    EXPECT_TRUE(re.test("build/out.o"));
+    EXPECT_TRUE(re.test("build/sub/deep.o"));
+    EXPECT_FALSE(re.test("building.txt"));   // a plain file is unaffected
+    EXPECT_TRUE(re.matchesDirectoryContents("build"));
+}
+
+TEST(BitBackupIgnoreRegexTest, NegationDisablesDirectoryPruning) {
+    // With any '!' rule present, pruning is disabled so re-included files are
+    // never skipped by a pruned ancestor.
+    BitBackupIgnoreRegex re(writeIgnore("negprune", "/logs/*\n!logs/keep.log\n"));
+    EXPECT_FALSE(re.matchesDirectoryContents("logs"));
+    EXPECT_FALSE(re.test("logs/keep.log"));
+    EXPECT_TRUE(re.test("logs/other.log"));
+}

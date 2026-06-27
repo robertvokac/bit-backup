@@ -311,19 +311,31 @@ namespace BitBackup::Commands {
 
         found.reserve(200000);
 
-        for (auto const& e : std::filesystem::recursive_directory_iterator(bitBackupFiles.workingDir)) {
+        std::filesystem::recursive_directory_iterator it(bitBackupFiles.workingDir);
+        const std::filesystem::recursive_directory_iterator end;
+        for (; it != end; ++it) {
+            const auto& e = *it;
+            const auto abs = e.path().string();
+            const auto rel = abs.substr(rootAbs.size() + 1);
+
+            if (std::filesystem::is_directory(e)) {
+                // Prune directories whose entire contents are ignored so we never
+                // walk big ignored trees (.git, node_modules, ...). matchesDirectoryContents
+                // only returns true when every child would be ignored anyway, so
+                // this never drops a file that would otherwise be tracked.
+                if (bitBackupFiles.bitBackupIgnoreRegex->matchesDirectoryContents(rel)) {
+                    it.disable_recursion_pending();
+                }
+                continue;
+            }
 
             if (!std::filesystem::is_regular_file(e))
                 continue;
-
-            const auto abs = e.path().string();
 
             if (abs == dbAbs)
                 continue;
             if (abs == dbShaAbs)
                 continue;
-
-            const auto rel = abs.substr(rootAbs.size() + 1);
 
             if (bitBackupFiles.bitBackupIgnoreRegex->test(rel))
                 continue;

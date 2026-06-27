@@ -41,6 +41,11 @@ namespace BitBackup::Core {
 
         [[nodiscard]] bool test(const std::string &text) const;
 
+        // True only when EVERY possible child of dirRelPath would be ignored, so
+        // the scan can safely skip recursing into that directory without ever
+        // dropping a file that would otherwise be tracked.
+        [[nodiscard]] bool matchesDirectoryContents(const std::string &dirRelPath) const;
+
         // When false (default) test() does not print per-file "ignoring file"
         // lines; enable only for verbose runs.
         void setVerbose(bool v) { verbose = v; }
@@ -50,6 +55,10 @@ namespace BitBackup::Core {
         // test() call (the old code rebuilt a std::regex per pattern per file).
         std::vector<std::regex> patterns;
         bool verbose = false;
+
+        // Match without the verbose side effect (used by both test() and the
+        // directory-pruning probe).
+        [[nodiscard]] bool matchesAny(const std::string &text) const;
 
         void addPattern(const std::string &unixWildcard);
 

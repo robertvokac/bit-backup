@@ -103,3 +103,33 @@ TEST(BitBackupIgnoreRegexTest, UnrelatedFilesAreKept) {
     EXPECT_FALSE(re.test("README.md"));
     EXPECT_FALSE(re.test("data/important.bin"));
 }
+
+TEST(BitBackupIgnoreRegexTest, DirectoryPruneOnlyWhenAllChildrenIgnored) {
+    BitBackupIgnoreRegex re(writeIgnore("prune", "/logs/*\n/node_modules/*\n"));
+    // whole subtree ignored -> safe to prune
+    EXPECT_TRUE(re.matchesDirectoryContents("logs"));
+    EXPECT_TRUE(re.matchesDirectoryContents("node_modules"));
+    // unrelated dir -> must keep descending
+    EXPECT_FALSE(re.matchesDirectoryContents("src"));
+}
+
+TEST(BitBackupIgnoreRegexTest, DoNotPruneWhenOnlyDirNameMatches) {
+    // Bare "build" matches a file/dir named build, but NOT build/out.o, so the
+    // directory must NOT be pruned (build/out.o would still be tracked).
+    BitBackupIgnoreRegex re(writeIgnore("bare", "build\n"));
+    EXPECT_TRUE(re.test("build"));
+    EXPECT_FALSE(re.matchesDirectoryContents("build"));
+}
+
+TEST(BitBackupIgnoreRegexTest, DoNotPruneExtensionDirWithKeptChildren) {
+    // "*.tmp" matches foo.tmp itself, but foo.tmp/bar.txt does not end in .tmp,
+    // so pruning foo.tmp would wrongly drop a tracked file.
+    BitBackupIgnoreRegex re(writeIgnore("exttmp", "*.tmp\n"));
+    EXPECT_FALSE(re.matchesDirectoryContents("foo.tmp"));
+}
+
+TEST(BitBackupIgnoreRegexTest, NestedDirectoryPrune) {
+    BitBackupIgnoreRegex re(writeIgnore("nested", "/logs/keep/*\n"));
+    EXPECT_FALSE(re.matchesDirectoryContents("logs"));      // logs/other must be kept
+    EXPECT_TRUE(re.matchesDirectoryContents("logs/keep"));  // whole keep subtree ignored
+}

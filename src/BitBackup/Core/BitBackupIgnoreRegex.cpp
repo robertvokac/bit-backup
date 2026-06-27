@@ -99,16 +99,34 @@ namespace BitBackup::Core {
                               std::regex_constants::ECMAScript);
     }
 
-    bool BitBackupIgnoreRegex::test(const std::string& text) const {
+    bool BitBackupIgnoreRegex::matchesAny(const std::string& text) const {
         for (const auto& re : patterns) {
             if (std::regex_match(text, re)) {
-                if (verbose) {
-                    std::cout << "ignoring file: " << text << std::endl;
-                }
-                return true;  // Match found, ignore the file
+                return true;
             }
         }
         return false;
+    }
+
+    bool BitBackupIgnoreRegex::test(const std::string& text) const {
+        if (matchesAny(text)) {
+            if (verbose) {
+                std::cout << "ignoring file: " << text << std::endl;
+            }
+            return true;  // Match found, ignore the file
+        }
+        return false;
+    }
+
+    bool BitBackupIgnoreRegex::matchesDirectoryContents(const std::string& dirRelPath) const {
+        // Probe with an arbitrary deep child path. If some pattern matches it,
+        // that pattern absorbs the whole subtree (it ended in a wildcard), so
+        // every real child is ignored too and the directory can be pruned. A
+        // pattern that only matched a *specific* child would not match this
+        // probe, so we conservatively keep descending in that case.
+        static const std::string probe =
+            "/\x01__bitbackup_probe__\x01/\x01child\x01";
+        return matchesAny(dirRelPath + probe);
     }
 
     std::string BitBackupIgnoreRegex::convertUnixRegexToCppRegex(const std::string& wildcard) {

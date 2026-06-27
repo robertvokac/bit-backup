@@ -25,6 +25,8 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <exception>
+#include <unistd.h>
 #include "BitBackup/Core/BitBackupProgram.h"
 
 namespace BitBackup::Core {
@@ -37,9 +39,19 @@ namespace BitBackup::Core {
 
             std::vector<std::string> args(argv + 1, argv + argc);
 
-            auto* bitBackupProgram = new BitBackupProgram();
-            bitBackupProgram->run(args);
-            delete bitBackupProgram;
+            try {
+                BitBackupProgram bitBackupProgram;
+                bitBackupProgram.run(args);
+            } catch (const std::exception &ex) {
+                // Report any error cleanly instead of letting it escape main()
+                // and abort the process (SIGABRT). Colorize only on a terminal.
+                const bool tty = isatty(fileno(stderr)) != 0;
+                std::cerr << (tty ? "\033[31m" : "")
+                          << "Error: " << ex.what()
+                          << (tty ? "\033[0m" : "")
+                          << std::endl;
+                return 1;
+            }
             return 0;
         }
     };

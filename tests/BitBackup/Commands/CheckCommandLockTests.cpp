@@ -187,12 +187,18 @@ TEST_F(CheckCommandLockTest, DeletedLockedFileIsKept) {
     runCheck();
     writeFile(dir / "d/.bitbackuplock", "");
     runCheck();                                   // mark locked
-    ASSERT_EQ(queryRow("d/a.txt").locked, 1);
+    const Row before = queryRow("d/a.txt");
+    ASSERT_EQ(before.locked, 1);
 
     fs::remove(dir / "d/a.txt");
     const std::string res = runCheck();
     EXPECT_NE(res.find("locked file deleted"), std::string::npos);
-    EXPECT_TRUE(queryRow("d/a.txt").exists);      // row preserved even though the marker is still there
+
+    const Row after = queryRow("d/a.txt");
+    EXPECT_TRUE(after.exists);                     // row preserved
+    EXPECT_EQ(after.result, "KO");                 // flagged
+    EXPECT_EQ(after.hash, before.hash);            // mtime/hash stay frozen
+    EXPECT_EQ(after.mtime, before.mtime);
 }
 
 TEST_F(CheckCommandLockTest, DeletedLockedFileWithMarkerGoneStillReported) {
@@ -207,7 +213,9 @@ TEST_F(CheckCommandLockTest, DeletedLockedFileWithMarkerGoneStillReported) {
     fs::remove_all(dir / "d");                     // dir + marker + file all gone
     const std::string res = runCheck();
     EXPECT_NE(res.find("locked file deleted"), std::string::npos);
-    EXPECT_TRUE(queryRow("d/a.txt").exists);
+    const Row after = queryRow("d/a.txt");
+    EXPECT_TRUE(after.exists);
+    EXPECT_EQ(after.result, "KO");
 }
 
 TEST_F(CheckCommandLockTest, UnlockingResumesNormalUpdates) {

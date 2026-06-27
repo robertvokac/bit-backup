@@ -88,6 +88,8 @@ namespace BitBackup::Commands {
         // IDs of DB rows whose file is gone from disk (normal deletions AND
         // locked deletions that are kept). part8 must not try to hash these.
         std::unordered_set<std::string> missingFromDiskIds;
+        // Locked rows whose file was deleted: kept in the DB but flagged KO.
+        std::vector<Entity::FsFile> lockedDeletedFiles;
 
         static constexpr const char* BITBACKUPLOCK = ".bitbackuplock";
 

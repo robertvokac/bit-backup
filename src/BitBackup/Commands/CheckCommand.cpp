@@ -620,9 +620,11 @@ namespace BitBackup::Commands {
                 // Gone from disk: part8 must skip it (cannot be hashed).
                 missingFromDiskIds.insert(fileInDb.id);
                 // A file that was (or still is) inside a locked subtree must not
-                // be silently dropped from the DB - report it and keep the row.
+                // be silently dropped from the DB - report it, keep the row, and
+                // flag it KO (done in part8 where the timestamp is available).
                 if (fileInDb.locked == 1 || isPathLocked(absolutePathOfFileInDb)) {
                     lockViolations.push_back("locked file deleted: " + absolutePathOfFileInDb);
+                    lockedDeletedFiles.push_back(fileInDb);
                     continue;
                 }
                 filesToBeRemovedFromDb.push_back(fileInDb);
@@ -832,6 +834,15 @@ namespace BitBackup::Commands {
                     filesToUpdateLastCheckDate.push_back(fileInDb);
                 }
             }
+        }
+
+        // Locked files whose content was deleted: keep the row (frozen mtime/hash)
+        // but flag it KO so the violation is visible in the DB too.
+        for (FsFile f : lockedDeletedFiles) {
+            f.lastCheckDate = nowStr;
+            f.lastCheckResult = "KO";
+            f.locked = 1;
+            filesToUpdate.push_back(f);
         }
 
         // Flush all per-file mutations (bit rot, modified, zero-size fixups) in a

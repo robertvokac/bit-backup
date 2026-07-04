@@ -117,6 +117,17 @@ namespace BitBackup::Commands {
             const unsigned hc = std::thread::hardware_concurrency();
             return hc == 0 ? 4u : hc;
         }
+
+        // Whether the immediate containing directory of relPath still exists on
+        // disk. Used to tell "the lock marker alone was removed" (directory
+        // stays) apart from "the whole locked subtree vanished at once"
+        // (directory is gone too) when a previously-locked file is deleted.
+        bool parentDirStillExists(const std::string& workingDir, const std::string& relPath) {
+            const auto slash = relPath.find_last_of('/');
+            const std::string parentRel = (slash == std::string::npos) ? std::string() : relPath.substr(0, slash);
+            std::error_code ec;
+            return std::filesystem::is_directory(workingDir + "/" + parentRel, ec);
+        }
     }
 
     CheckCommand::CheckCommand() = default;
@@ -619,10 +630,18 @@ namespace BitBackup::Commands {
             if (!filesInFileSystem.doesSetContain(absolutePathOfFileInDb)) {
                 // Gone from disk: part8 must skip it (cannot be hashed).
                 missingFromDiskIds.insert(fileInDb.id);
-                // A file that was (or still is) inside a locked subtree must not
-                // be silently dropped from the DB - report it, keep the row, and
+                // A file that is still inside a locked subtree must not be
+                // silently dropped from the DB - report it, keep the row, and
                 // flag it KO (done in part8 where the timestamp is available).
-                if (fileInDb.locked == 1 || isPathLocked(absolutePathOfFileInDb)) {
+                // A file that WAS locked but no longer is (marker removed) only
+                // stays a violation if its containing directory vanished too -
+                // that is the "whole locked subtree deleted at once" bypass. If
+                // the directory is still there, the marker's removal genuinely
+                // unlocked it, so the deletion resumes normal handling below.
+                const bool stillLocked = isPathLocked(absolutePathOfFileInDb);
+                const bool wasLockedAndDirGoneToo = fileInDb.locked == 1 &&
+                    !parentDirStillExists(bitBackupContext.getWorkingDirectory(), absolutePathOfFileInDb);
+                if (stillLocked || wasLockedAndDirGoneToo) {
                     lockViolations.push_back("locked file deleted: " + absolutePathOfFileInDb);
                     lockedDeletedFiles.push_back(fileInDb);
                     continue;

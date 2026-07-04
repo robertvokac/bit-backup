@@ -218,6 +218,26 @@ TEST_F(CheckCommandLockTest, DeletedLockedFileWithMarkerGoneStillReported) {
     EXPECT_EQ(after.result, "KO");
 }
 
+TEST_F(CheckCommandLockTest, UnlockingResolvesPreviouslyReportedDeletion) {
+    // Removing only the marker (the directory itself stays) must let a
+    // deletion that was reported while locked finally resolve, per the
+    // README's promise that removing .bitbackuplock resumes normal updates.
+    writeFile(dir / "d/a.txt", "a");
+    runCheck();
+    writeFile(dir / "d/.bitbackuplock", "");
+    runCheck();                                    // mark locked
+
+    fs::remove(dir / "d/a.txt");
+    const std::string res1 = runCheck();
+    EXPECT_NE(res1.find("locked file deleted"), std::string::npos);
+    ASSERT_TRUE(queryRow("d/a.txt").exists);
+
+    fs::remove(dir / "d/.bitbackuplock");          // unlock only; "d" stays
+    const std::string res2 = runCheck();
+    EXPECT_EQ(res2, "");                            // no more violation
+    EXPECT_FALSE(queryRow("d/a.txt").exists);       // row finally removed
+}
+
 TEST_F(CheckCommandLockTest, UnlockingResumesNormalUpdates) {
     writeFile(dir / "d/a.txt", "v1");
     runCheck();

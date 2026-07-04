@@ -1,7 +1,7 @@
 # NEXT.md
 
 Handoff document for resuming work on **bit-backup**. Based only on the current
-repo state (branch `develop`, HEAD `2dc752e`) and observed build/test behavior.
+repo state (branch `develop`, HEAD `6eaae6b`) and observed build/test behavior.
 
 ---
 
@@ -33,11 +33,12 @@ repo state (branch `develop`, HEAD `2dc752e`) and observed build/test behavior.
 - **Build:** WORKS. CMake (Release) builds `bit_backup` and (with
   `-DENABLE_TESTS=ON`) the `Tests` target cleanly. Toolchain in use: GCC 14,
   CMake 3.31, OpenSSL 3.5, bundled SQLiteCpp + googletest submodules.
-- **Tests:** PASS — `ctest` reports **47/47** passing.
+- **Tests:** PASS — `ctest` reports **49/49** passing.
 - **CLI available:**
   - Commands: `check` (default when no command given), `help`, `version`.
   - `check` options: `dir=`, `report=true`, `verbose=true`, `bitbackupindex=true`,
-    `threads=N`, `quick=true`, `scrub=N` (0–100).
+    `threads=N`, `quick=true`, `scrub=N` (0–100), `confirm=delete` (interactive,
+    per-violation permanent-removal prompt for stuck locked-file deletions).
   - Exit code: `check` returns **non-zero (1)** when bit rot OR a lock violation
     is found; `help`/`version` always return 0; unknown command/arguments print
     a clean error and return 1 (no more SIGABRT).
@@ -60,6 +61,20 @@ repo state (branch `develop`, HEAD `2dc752e`) and observed build/test behavior.
 
 ## 3. Recent changes (most recent first)
 
+- `6eaae6b` **Feature:** `check confirm=delete` interactively asks, per
+  "locked file deleted" violation, whether to permanently remove it from the
+  DB (`y` removes it — even overriding an active lock — anything else/EOF
+  leaves it exactly as before). This is the supported way to resolve
+  violations that can never auto-clear (e.g. a whole locked subtree deleted
+  together with its `.bitbackuplock` marker in one shot) without resorting to
+  raw SQLite edits, which would desync the DB's own self-integrity checksum
+  and make the next `check` abort at part 1. `CheckCommand` gained a second
+  constructor taking an injectable `std::istream&` (defaults to `std::cin`)
+  so the prompt is testable without real stdin. Added
+  `CheckCommandLockTest.ConfirmDeleteAcceptsBypassDeletionWhenConfirmed` /
+  `.ConfirmDeleteKeepsViolationWhenDeclined`. Only covers deletion-type
+  violations so far — "locked file modified" / "new file in locked
+  directory" are not yet confirmable this way.
 - `2dc752e` **Fix:** removing `.bitbackuplock` after a file was deleted while
   locked now actually unlocks it. Previously `part7RemoveDeletedFilesFromDb`
   kept `fileInDb.locked == 1` as a permanent fallback, so a "locked file
@@ -170,7 +185,9 @@ the bit-rot summary and the CSV report:
   violation if the marker and its directory vanish together in one shot. If
   only the marker is removed (the directory still exists), `part7` now treats
   the persisted `LOCKED` flag as resolved and lets the deletion resume normal
-  handling (row removed) — see the `2dc752e` fix in §3.
+  handling (row removed) — see the `2dc752e` fix in §3. Violations that still
+  can't auto-resolve (whole subtree + marker deleted together) require an
+  explicit per-item `y` under `check confirm=delete` (`6eaae6b`) to remove.
 - **Invariants that MUST hold:**
   - Default (unlocked, no-flag) `check` behavior must stay byte-identical — the
     golden scenario is the guard.
@@ -220,6 +237,12 @@ cd build && ctest --output-on-failure
 #   index a dir, then `touch <dir>/subdir/.bitbackuplock`, run check again,
 #   then modify a file under subdir and run check -> violation + exit 1,
 #   stored mtime/hash unchanged.
+
+# confirm=delete demo (resolving a stuck locked-deletion violation):
+#   index a dir, lock it, delete the whole subtree + marker in one shot,
+#   run check (violation, stuck forever without confirm), then:
+#   ./build/bit_backup check confirm=delete
+#   -> prompts "... Permanently remove from the database? [y/N]:" per item.
 ```
 
 No linter/formatter is configured in the repo.
@@ -240,7 +263,7 @@ No linter/formatter is configured in the repo.
      in `run()` and `part9CreateReportCsvIfNeeded` (replace `"./" + f.absolutePath`
      with `bitBackupContext.getWorkingDirectory()` / `bitBackupFiles.workingDir`
      joined paths).
-   - Verify: the task-1 test now PASSES; `ctest` stays 46+/all green; golden
+   - Verify: the task-1 test now PASSES; `ctest` stays 49+/all green; golden
      scenario still identical.
 
 3. **Remove the unused `filesToBeRemovedFromDb` parameter from part8.**
@@ -271,6 +294,8 @@ No linter/formatter is configured in the repo.
 - **Do not change the default (unlocked, no-flag) `check` behavior** without
   re-running the golden scenario; it must stay identical.
 - **No new subcommands** (e.g. `lock`/`unlock`/`status`) until §4 is fixed.
+  (`check confirm=delete` added in `6eaae6b` is a `check` *option*, not a new
+  subcommand, so it doesn't violate this — keep future additions the same way.)
 - **Do not "fix" the embedded git PAT in code** — that's an owner/ops action
   (rotate + credential helper), not a source change.
 

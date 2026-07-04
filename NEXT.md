@@ -1,7 +1,7 @@
 # NEXT.md
 
 Handoff document for resuming work on **bit-backup**. Based only on the current
-repo state (branch `develop`, HEAD `cec3346`) and observed build/test behavior.
+repo state (branch `develop`, HEAD `2dc752e`) and observed build/test behavior.
 
 ---
 
@@ -33,7 +33,7 @@ repo state (branch `develop`, HEAD `cec3346`) and observed build/test behavior.
 - **Build:** WORKS. CMake (Release) builds `bit_backup` and (with
   `-DENABLE_TESTS=ON`) the `Tests` target cleanly. Toolchain in use: GCC 14,
   CMake 3.31, OpenSSL 3.5, bundled SQLiteCpp + googletest submodules.
-- **Tests:** PASS — `ctest` reports **46/46** passing.
+- **Tests:** PASS — `ctest` reports **47/47** passing.
 - **CLI available:**
   - Commands: `check` (default when no command given), `help`, `version`.
   - `check` options: `dir=`, `report=true`, `verbose=true`, `bitbackupindex=true`,
@@ -60,6 +60,16 @@ repo state (branch `develop`, HEAD `cec3346`) and observed build/test behavior.
 
 ## 3. Recent changes (most recent first)
 
+- `2dc752e` **Fix:** removing `.bitbackuplock` after a file was deleted while
+  locked now actually unlocks it. Previously `part7RemoveDeletedFilesFromDb`
+  kept `fileInDb.locked == 1` as a permanent fallback, so a "locked file
+  deleted" violation could never clear even after the marker was removed. Now
+  it only stays a violation if the file's containing directory is *also* gone
+  (the "whole locked subtree deleted at once" bypass this fallback exists to
+  catch, per `DeletedLockedFileWithMarkerGoneStillReported`); if the directory
+  still exists, removing the marker resumes normal deletion handling and the
+  row is finally removed, matching the README's documented contract. Added
+  `CheckCommandLockTest.UnlockingResolvesPreviouslyReportedDeletion`.
 - `cec3346` Flag deleted locked files as `KO` in the DB (kept row, frozen
   mtime/hash, result set to KO).
 - `4cd53a2` **Directory locking via `.bitbackuplock`**: migration #5 adds a
@@ -156,8 +166,11 @@ the bit-rot summary and the CSV report:
   `Persistence/Impl/Sqlite/SqliteDatabaseMigration` (+ `Migrations.h`).
 - **Data flow for locking:** part4 records dirs containing `.bitbackuplock` as
   `lockRoots` (`""` = working-dir root); `isPathLocked(rel)` checks ancestors;
-  the `LOCKED` column persists the state so deletions are caught even after the
-  marker is gone.
+  the `LOCKED` column persists the state so a deletion is still caught as a
+  violation if the marker and its directory vanish together in one shot. If
+  only the marker is removed (the directory still exists), `part7` now treats
+  the persisted `LOCKED` flag as resolved and lets the deletion resume normal
+  handling (row removed) — see the `2dc752e` fix in §3.
 - **Invariants that MUST hold:**
   - Default (unlocked, no-flag) `check` behavior must stay byte-identical — the
     golden scenario is the guard.

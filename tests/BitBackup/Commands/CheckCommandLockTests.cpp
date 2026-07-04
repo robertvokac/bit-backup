@@ -98,6 +98,27 @@ protected:
         return result;
     }
 
+    // Like runCheck, but confirm=delete prompts read scripted answers (one
+    // per line, e.g. "y\nn\n") instead of the real stdin.
+    std::string runCheckWithAnswers(const std::vector<std::string>& args, const std::string& answers) {
+        std::stringstream sink;
+        std::istringstream in(answers);
+        std::streambuf* oldOut = std::cout.rdbuf(sink.rdbuf());
+        std::streambuf* oldErr = std::cerr.rdbuf(sink.rdbuf());
+        std::string result;
+        try {
+            CheckCommand cmd(in);
+            result = cmd.run(BitBackupArgs(args));
+        } catch (...) {
+            std::cout.rdbuf(oldOut);
+            std::cerr.rdbuf(oldErr);
+            throw;
+        }
+        std::cout.rdbuf(oldOut);
+        std::cerr.rdbuf(oldErr);
+        return result;
+    }
+
     Row queryRow(const std::string& relPath) {
         SQLite::Database db((dir / ".bitbackup.sqlite3").string(), SQLite::OPEN_READONLY);
         SQLite::Statement q(db,
@@ -199,6 +220,35 @@ TEST_F(CheckCommandLockTest, DeletedLockedFileIsKept) {
     EXPECT_EQ(after.result, "KO");                 // flagged
     EXPECT_EQ(after.hash, before.hash);            // mtime/hash stay frozen
     EXPECT_EQ(after.mtime, before.mtime);
+}
+
+TEST_F(CheckCommandLockTest, ConfirmDeleteAcceptsBypassDeletionWhenConfirmed) {
+    // confirm=delete + an interactive "y" permanently resolves a violation
+    // that would otherwise be stuck forever (whole subtree gone at once).
+    writeFile(dir / "d/a.txt", "a");
+    runCheck();
+    writeFile(dir / "d/.bitbackuplock", "");
+    runCheck();
+    fs::remove_all(dir / "d");                     // dir + marker + file all gone
+    ASSERT_NE(runCheck().find("locked file deleted"), std::string::npos);
+
+    const std::string res = runCheckWithAnswers({"check", "confirm=delete"}, "y\n");
+    EXPECT_EQ(res.find("locked file deleted"), std::string::npos);
+    EXPECT_FALSE(queryRow("d/a.txt").exists);
+}
+
+TEST_F(CheckCommandLockTest, ConfirmDeleteKeepsViolationWhenDeclined) {
+    // Same setup, but answering "n" (or default/EOF) must change nothing.
+    writeFile(dir / "d/a.txt", "a");
+    runCheck();
+    writeFile(dir / "d/.bitbackuplock", "");
+    runCheck();
+    fs::remove_all(dir / "d");
+    ASSERT_NE(runCheck().find("locked file deleted"), std::string::npos);
+
+    const std::string res = runCheckWithAnswers({"check", "confirm=delete"}, "n\n");
+    EXPECT_NE(res.find("locked file deleted"), std::string::npos);
+    EXPECT_TRUE(queryRow("d/a.txt").exists);
 }
 
 TEST_F(CheckCommandLockTest, DeletedLockedFileWithMarkerGoneStillReported) {

@@ -69,14 +69,21 @@ namespace BitBackup::Commands {
         std::stringstream bitbackupindexSB;
 
         // Resolved once at the start of run() from the CLI arguments:
-        //   threads=N   number of hashing worker threads (default: hw concurrency)
-        //   quick=true  skip re-hashing files whose modtime is unchanged
-        //               (fast, but does NOT detect silent bit rot)
-        //   scrub=N     re-hash only the oldest N% of unchanged-modtime files
-        //               this run (rotating coverage); 100 = full, 0 = quick
+        //   threads=N     number of hashing worker threads (default: hw concurrency)
+        //   quick=true    skip re-hashing files whose modtime is unchanged
+        //                 (fast, but does NOT detect silent bit rot)
+        //   scrub=N       re-hash only the oldest N% of unchanged-modtime files
+        //                 this run (rotating coverage); 100 = full, 0 = quick
+        //   confirm=delete interactively ask, per locked-file-deletion violation,
+        //                 whether to permanently remove it from the DB
         unsigned numThreads = 1;
         bool quickMode = false;
         int scrubPercent = 100;
+        bool confirmDelete = false;
+
+        // Where confirm=delete prompts are read from; std::cin by default, but
+        // injectable so tests can supply canned answers without real stdin.
+        std::istream& confirmInput;
 
         // Directories (relative to the working dir) that contain a .bitbackuplock
         // marker; "" means the working dir root itself is locked. A file is locked
@@ -94,6 +101,11 @@ namespace BitBackup::Commands {
         static constexpr const char* BITBACKUPLOCK = ".bitbackuplock";
 
         [[nodiscard]] bool isPathLocked(const std::string& relPath) const;
+
+        // When confirmDelete is active, prints message + prompts confirmInput
+        // for a yes/no answer. Returns false (decline) on "no" or EOF/closed
+        // stdin, so a non-interactive run never accidentally deletes anything.
+        bool confirmViolation(const std::string& message);
 
         void part1CheckDbHasExpectedHashSum(const Core::BitBackupFiles &bitBackupFiles) noexcept(false);
 
@@ -146,6 +158,7 @@ namespace BitBackup::Commands {
         static constexpr std::string BIBVERSION = "bib.version";
 
         CheckCommand();
+        explicit CheckCommand(std::istream& confirmInput);
 
         [[nodiscard]] string getName() const override;
 

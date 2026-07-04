@@ -130,10 +130,20 @@ namespace BitBackup::Commands {
         }
     }
 
-    CheckCommand::CheckCommand() = default;
+    CheckCommand::CheckCommand() : CheckCommand(std::cin) {}
+
+    CheckCommand::CheckCommand(std::istream& confirmInput) : confirmInput(confirmInput) {}
 
     string CheckCommand::getName() const {
         return NAME;
+    }
+
+    bool CheckCommand::confirmViolation(const std::string& message) {
+        if (!confirmDelete) return false;
+        cout << message << " Permanently remove from the database? [y/N]: " << std::flush;
+        std::string answer;
+        if (!std::getline(confirmInput, answer)) return false; // EOF/no input -> decline
+        return answer == "y" || answer == "Y" || answer == "yes" || answer == "Yes";
     }
 
     static int iStatic = 0;
@@ -152,9 +162,11 @@ namespace BitBackup::Commands {
             } catch (...) { scrubPercent = 100; }
         }
         if (quickMode) scrubPercent = 0; // quick == scrub 0%
+        confirmDelete = bitBackupArgs.hasArgument("confirm") && bitBackupArgs.getArgument("confirm") == "delete";
         cout << "Options: threads=" << numThreads
              << " quick=" << (quickMode ? "true" : "false")
-             << " scrub=" << scrubPercent << "%" << std::endl;
+             << " scrub=" << scrubPercent << "%"
+             << " confirm=" << (confirmDelete ? "delete" : "none") << std::endl;
         //
         //part 1:
         part1CheckDbHasExpectedHashSum(bitBackupFiles);
@@ -642,6 +654,14 @@ namespace BitBackup::Commands {
                 const bool wasLockedAndDirGoneToo = fileInDb.locked == 1 &&
                     !parentDirStillExists(bitBackupContext.getWorkingDirectory(), absolutePathOfFileInDb);
                 if (stillLocked || wasLockedAndDirGoneToo) {
+                    // With confirm=delete, ask per item instead of leaving it
+                    // stuck forever: an explicit "yes" here permanently accepts
+                    // the deletion (even overriding an active lock), an
+                    // explicit/default "no" keeps today's behavior unchanged.
+                    if (confirmViolation("Lock violation: locked file deleted: " + absolutePathOfFileInDb)) {
+                        filesToBeRemovedFromDb.push_back(fileInDb);
+                        continue;
+                    }
                     lockViolations.push_back("locked file deleted: " + absolutePathOfFileInDb);
                     lockedDeletedFiles.push_back(fileInDb);
                     continue;

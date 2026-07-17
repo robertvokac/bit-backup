@@ -1,0 +1,7 @@
+# cmake build dirs
+cmake-build-debug/*
+cmake-build-release/*
+
+# submodules (SQLiteCpp, googletest)
+thirdparty/*
+vendor/*

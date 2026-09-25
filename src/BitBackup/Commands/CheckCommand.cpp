@@ -61,7 +61,8 @@
 #include <random>
 #include <algorithm>
 #include <atomic>
-#include <fstream>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -433,22 +434,53 @@ namespace BitBackup::Commands {
         });
 
         if (bitBackupArgs.isBitBackupIndexEnabled()) {
-            std::ofstream index(bitBackupFiles.bitbackupindex, std::ios::binary | std::ios::trunc);
+            // Write beside the destination, then replace its directory entry.
+            // Opening the destination directly would follow an existing symlink
+            // and could truncate a file outside the scanned directory.
+            // The suffix also keeps a crash-left temporary file out of future scans.
+            const std::string metadataSuffix = ".bitbackupindex.csv";
+            const std::string tempPattern = bitBackupFiles.bitbackupindex.string() +
+                                            ".tmp.XXXXXX" + metadataSuffix;
+            std::vector<char> tempName(tempPattern.begin(), tempPattern.end());
+            tempName.push_back('\0');
+            const int tempFd = ::mkstemps(tempName.data(), static_cast<int>(metadataSuffix.size()));
+            if (tempFd < 0) {
+                throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
+            }
+            const File tempPath(tempName.data());
+            std::FILE* index = ::fdopen(tempFd, "wb");
             if (!index) {
+                ::close(tempFd);
+                std::error_code ignored;
+                std::filesystem::remove(tempPath, ignored);
                 throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
             }
 
-            index << "path;size;sha512\n";
-            for (const File& file : found) {
-                const std::string relativePath =
-                    std::filesystem::absolute(file).lexically_relative(rootAbs).generic_string();
-                index << csvField(relativePath) << ';'
-                      << std::filesystem::file_size(file) << ';'
-                      << Core::Utils::calculateSHA512Hash(file) << '\n';
-            }
-            index.close();
-            if (!index) {
-                throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
+            try {
+                const auto write = [&](const std::string& line) {
+                    if (std::fwrite(line.data(), 1, line.size(), index) != line.size()) {
+                        throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
+                    }
+                };
+                write("path;size;sha512\n");
+                for (const File& file : found) {
+                    const std::string relativePath =
+                        std::filesystem::absolute(file).lexically_relative(rootAbs).generic_string();
+                    write(csvField(relativePath) + ';' +
+                          std::to_string(std::filesystem::file_size(file)) + ';' +
+                          Core::Utils::calculateSHA512Hash(file) + '\n');
+                }
+                const int closeResult = std::fclose(index);
+                index = nullptr;
+                if (closeResult != 0) {
+                    throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
+                }
+                std::filesystem::rename(tempPath, bitBackupFiles.bitbackupindex);
+            } catch (...) {
+                if (index) std::fclose(index);
+                std::error_code ignored;
+                std::filesystem::remove(tempPath, ignored);
+                throw;
             }
         }
 
@@ -462,9 +494,8 @@ namespace BitBackup::Commands {
 
 
     string CheckCommand::loadPathButOnlyTheNeededPart(const std::filesystem::path &currentDir, const std::filesystem::path &file) {
-        string currentDirAbsolutePath = absolute(currentDir).string();
-        string fileAbsolutePath = absolute(file).string();
-        return fileAbsolutePath.substr(currentDirAbsolutePath.size() + 1);
+        const File root = absolute(currentDir).lexically_normal();
+        return absolute(file).lexically_normal().lexically_relative(root).generic_string();
     }
     std::vector<std::filesystem::path> CheckCommand::foundFilesInCurrentDir(
         const File& currentDir,

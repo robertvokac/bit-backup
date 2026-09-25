@@ -64,6 +64,9 @@ The primary command is `check`, which scans the specified directory and updates 
 
 Unknown options and invalid values fail with a non-zero exit code. Boolean values must be exactly `true` or `false`.
 
+An index run replaces `.bitbackupindex.csv` itself. If that path is a symbolic
+link, the link is replaced and its target is left untouched.
+
 ### Performance
 On Linux, bit-backup detects whether the filesystem containing `dir` is backed
 by rotational, SATA/general solid-state, or NVMe storage. Detection follows

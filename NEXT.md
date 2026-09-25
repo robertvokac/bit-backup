@@ -36,7 +36,7 @@ working tree and observed build/test behavior.
 - **Build:** WORKS. CMake (Release) builds `bit_backup` and (with
   `-DENABLE_TESTS=ON`) the `Tests` target cleanly. Toolchain in use: GCC 14,
   CMake 3.31, OpenSSL 3.5, bundled SQLiteCpp + googletest submodules.
-- **Tests:** PASS — `ctest` reports **68/68** passing.
+- **Tests:** PASS — `ctest` reports **70/70** passing.
 - **CLI available:**
   - Commands: `check` (default when no command given), `help`, `version`.
   - `check` options: `dir=`, `report=true`, `verbose=true`, `bitbackupindex=true`,
@@ -66,6 +66,13 @@ working tree and observed build/test behavior.
 
 ## 3. Recent changes (most recent first)
 
+- **Working tree:** index output is written to a unique sibling file and renamed
+  over `.bitbackupindex.csv`, so an existing symlink cannot overwrite its target.
+  Temporary index files are excluded from later scans. The shared relative-path
+  helper now handles `dir=` with a trailing slash; repeated runs keep the correct
+  DB row and still detect silent corruption. CLI validation explicitly rejects
+  `threads=200` as outside the supported range. Regression tests cover these
+  edge cases.
 - **Working tree:** partial `scrub` now rounds a positive percentage up to at
   least one file and advances `LAST_CHECK_DATE` only for files actually hashed,
   so repeated runs rotate through the collection. Already known corruption is

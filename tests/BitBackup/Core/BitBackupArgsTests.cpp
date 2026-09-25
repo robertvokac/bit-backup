@@ -11,7 +11,7 @@ using BitBackup::Core::BitBackupArgs;
 TEST(BitBackupArgsTest, RejectsUnknownAndMalformedCheckOptions) {
     for (const std::string& option : {
              "repotr=true", "quick=treu", "scrub=oops", "scrub=25junk",
-             "scrub=101", "threads=abc", "threads=0", "threads=17",
+             "scrub=101", "threads=abc", "threads=0", "threads=17", "threads=200",
              "report", "dir=", "confirm=oops"}) {
         EXPECT_THROW(BitBackupArgs({"check", option}), std::invalid_argument) << option;
     }

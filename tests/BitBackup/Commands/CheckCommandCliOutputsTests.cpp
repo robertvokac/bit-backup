@@ -29,6 +29,8 @@
 #include <string>
 #include <vector>
 
+#include <SQLiteCpp/SQLiteCpp.h>
+
 #include "BitBackup/Commands/CheckCommand.h"
 #include "BitBackup/Core/BitBackupArgs.h"
 #include "BitBackup/Core/Utils.h"
@@ -104,6 +106,7 @@ TEST_F(CheckCommandCliOutputsTest, IndexListsScannedFilesAndSkipsIgnoredMetadata
     writeFile(dir / "semi;quote\".txt", "x");
     writeFile(dir / "skip.tmp", "ignored");
     writeFile(dir / ".bitbackupreport.csv", "previous report");
+    writeFile(dir / ".bitbackupindex.csv.tmp.leftover.bitbackupindex.csv", "partial index");
     writeFile(dir / ".bitbackupignore",
               "*.tmp\n!.bitbackupindex.csv\n!.bitbackupignore\n!.bitbackupreport.csv\n");
 
@@ -158,4 +161,41 @@ TEST_F(CheckCommandCliOutputsTest, RelativeDirArgScansAndIndexesTheSelectedDirec
     const CheckOutput check = runCheck({"report=true"}, relativeDir);
     EXPECT_NE(check.result.find("bitrot: keep.txt"), std::string::npos);
     EXPECT_NE(readFile(dir / ".bitbackupreport.csv").find("keep.txt;"), std::string::npos);
+}
+
+TEST_F(CheckCommandCliOutputsTest, IndexSymlinkDoesNotOverwriteItsTarget) {
+    const fs::path scan = dir / "scan";
+    writeFile(scan / "keep.txt", "hello");
+    const fs::path outside = dir / "outside.txt";
+    writeFile(outside, "must stay intact");
+    fs::create_symlink(outside, scan / ".bitbackupindex.csv");
+
+    EXPECT_EQ(runCheck({"bitbackupindex=true"}, scan).result, "");
+    EXPECT_EQ(readFile(outside), "must stay intact");
+    EXPECT_FALSE(fs::is_symlink(scan / ".bitbackupindex.csv"));
+    EXPECT_NE(readFile(scan / ".bitbackupindex.csv").find("keep.txt;5;"), std::string::npos);
+}
+
+TEST_F(CheckCommandCliOutputsTest, TrailingSlashDirKeepsFileTrackedAcrossRuns) {
+    writeFile(dir / "keep.txt", "original");
+    const fs::path target(dir.string() + "/");
+    const auto storedPaths = [&] {
+        SQLite::Database db((dir / ".bitbackup.sqlite3").string(), SQLite::OPEN_READONLY);
+        SQLite::Statement query(db, "SELECT ABSOLUTE_PATH FROM FILE");
+        std::vector<std::string> paths;
+        while (query.executeStep()) paths.push_back(query.getColumn(0).getString());
+        return paths;
+    };
+
+    EXPECT_EQ(runCheck({}, target).result, "");
+    EXPECT_EQ(storedPaths(), std::vector<std::string>{"keep.txt"});
+    EXPECT_EQ(runCheck({}, target).result, "");
+    EXPECT_EQ(storedPaths(), std::vector<std::string>{"keep.txt"});
+
+    const auto savedMtime = fs::last_write_time(dir / "keep.txt");
+    writeFile(dir / "keep.txt", "corrupted");
+    fs::last_write_time(dir / "keep.txt", savedMtime);
+    EXPECT_NE(runCheck({}, target).result.find("bitrot: keep.txt"), std::string::npos);
+    const fs::path relativeTarget(fs::relative(dir, fs::current_path()).string() + "/");
+    EXPECT_NE(runCheck({}, relativeTarget).result.find("bitrot: keep.txt"), std::string::npos);
 }

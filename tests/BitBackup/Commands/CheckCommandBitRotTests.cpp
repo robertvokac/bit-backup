@@ -33,6 +33,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
 
 #include <SQLiteCpp/SQLiteCpp.h>
 
@@ -64,7 +65,7 @@ protected:
                ::testing::UnitTest::GetInstance()->current_test_info()->name());
         fs::remove_all(dir);
         fs::create_directories(dir);
-        // run() uses CWD-relative paths for the bit-rot summary, so run from dir.
+        // Run from dir to exercise the default current-directory target.
         fs::current_path(dir);
     }
 
@@ -106,6 +107,13 @@ protected:
         }
         return "<missing>";
     }
+
+    std::string queryLastCheckDate(const std::string& relPath) {
+        SQLite::Database db((dir / ".bitbackup.sqlite3").string(), SQLite::OPEN_READONLY);
+        SQLite::Statement q(db, "SELECT LAST_CHECK_DATE FROM FILE WHERE ABSOLUTE_PATH = ?");
+        q.bind(1, relPath);
+        return q.executeStep() ? q.getColumn(0).getString() : "<missing>";
+    }
 };
 
 TEST_F(CheckCommandBitRotTest, SilentBitRotIsDetectedWhenModtimeUnchanged) {
@@ -125,6 +133,10 @@ TEST_F(CheckCommandBitRotTest, SilentBitRotIsDetectedWhenModtimeUnchanged) {
     const std::string result = runCheck();
     EXPECT_NE(result.find("data.bin"), std::string::npos)
         << "bit rot was not reported; run() returned: '" << result << "'";
+    EXPECT_EQ(queryResult("data.bin"), "KO");
+
+    // A later quick run must not clear a known corruption without hashing it.
+    EXPECT_NE(runCheck({"check", "quick=true"}).find("data.bin"), std::string::npos);
     EXPECT_EQ(queryResult("data.bin"), "KO");
 }
 
@@ -164,4 +176,51 @@ TEST_F(CheckCommandBitRotTest, UnchangedFileStaysOk) {
     EXPECT_EQ(runCheck(), "");
     EXPECT_EQ(runCheck(), "");                       // second run, still clean
     EXPECT_EQ(queryResult("stable.dat"), "OK");
+}
+
+TEST_F(CheckCommandBitRotTest, PartialScrubRotatesThroughPreviouslySkippedFiles) {
+    for (const char* name : {"a.txt", "b.txt", "c.txt", "d.txt"}) {
+        writeFile(dir / name, name);
+    }
+    ASSERT_EQ(runCheck(), "");
+    const std::string baselineDate = queryLastCheckDate("d.txt");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    ASSERT_EQ(runCheck({"check", "scrub=25"}), "");
+    EXPECT_NE(queryLastCheckDate("a.txt"), baselineDate);
+    EXPECT_EQ(queryLastCheckDate("d.txt"), baselineDate);
+
+    const auto oldMtime = fs::last_write_time(dir / "d.txt");
+    writeFile(dir / "d.txt", "silent corruption");
+    fs::last_write_time(dir / "d.txt", oldMtime);
+
+    for (int run = 0; run < 2; ++run) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        EXPECT_EQ(runCheck({"check", "scrub=25"}), "");
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT_NE(runCheck({"check", "scrub=25"}).find("d.txt"), std::string::npos);
+    EXPECT_EQ(queryResult("d.txt"), "KO");
+}
+
+TEST_F(CheckCommandBitRotTest, PositiveScrubChecksOneFileEvenInSmallCollection) {
+    for (const char* name : {"a.txt", "b.txt", "c.txt"}) {
+        writeFile(dir / name, name);
+    }
+    ASSERT_EQ(runCheck(), "");
+    const auto oldMtime = fs::last_write_time(dir / "a.txt");
+    writeFile(dir / "a.txt", "silent corruption");
+    fs::last_write_time(dir / "a.txt", oldMtime);
+
+    EXPECT_NE(runCheck({"check", "scrub=25"}).find("a.txt"), std::string::npos);
+}
+
+TEST_F(CheckCommandBitRotTest, QuickRunDoesNotClaimToHaveHashedSkippedFile) {
+    writeFile(dir / "stable.txt", "constant");
+    ASSERT_EQ(runCheck(), "");
+    const std::string baselineDate = queryLastCheckDate("stable.txt");
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    EXPECT_EQ(runCheck({"check", "quick=true"}), "");
+    EXPECT_EQ(queryLastCheckDate("stable.txt"), baselineDate);
 }

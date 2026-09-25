@@ -1,7 +1,7 @@
 # NEXT.md
 
-Handoff document for resuming work on **bit-backup**. Based only on the current
-repo state (branch `develop`, HEAD `6eaae6b`) and observed build/test behavior.
+Handoff document for resuming work on **bit-backup**. Updated for the current
+working tree and observed build/test behavior.
 
 ---
 
@@ -36,18 +36,20 @@ repo state (branch `develop`, HEAD `6eaae6b`) and observed build/test behavior.
 - **Build:** WORKS. CMake (Release) builds `bit_backup` and (with
   `-DENABLE_TESTS=ON`) the `Tests` target cleanly. Toolchain in use: GCC 14,
   CMake 3.31, OpenSSL 3.5, bundled SQLiteCpp + googletest submodules.
-- **Tests:** PASS — `ctest` reports **49/49** passing.
+- **Tests:** PASS — `ctest` reports **68/68** passing.
 - **CLI available:**
   - Commands: `check` (default when no command given), `help`, `version`.
   - `check` options: `dir=`, `report=true`, `verbose=true`, `bitbackupindex=true`,
     `threads=N`, `quick=true`, `scrub=N` (0–100), `confirm=delete` (interactive,
     per-violation permanent-removal prompt for stuck locked-file deletions).
   - Exit code: `check` returns **non-zero (1)** when bit rot OR a lock violation
-    is found; `help`/`version` always return 0; unknown command/arguments print
+    is found; `help`/`version` without options return 0; unknown command/arguments print
     a clean error and return 1 (no more SIGABRT).
-- **Recently implemented (working):** batched SQLite writes; storage-aware
-  parallel SHA-512 hashing; `quick`/`scrub` modes; `.bitbackupignore`
-  precompiled regex + fixed
+- **Recently implemented (working):** CSV file index with relative path, byte
+  size, and SHA-512 for every included file; correct bit-rot summary and CSV
+  report paths when `dir=` points outside the process CWD; relative `dir=`
+  scanning; batched SQLite writes; storage-aware parallel SHA-512 hashing;
+  `quick`/`scrub` modes; `.bitbackupignore` precompiled regex + fixed
   leading-slash/CRLF handling + directory pruning + negation/trailing-slash;
   graceful error handling; `.bitbackuplock` directory locking with a `LOCKED`
   DB column.
@@ -55,16 +57,26 @@ repo state (branch `develop`, HEAD `6eaae6b`) and observed build/test behavior.
   / delete / silent bit rot) and the lock end-to-end tests all pass; manual
   verification of locking, quick/scrub, and the migration upgrade path was done.
 - **What does NOT work yet / caveats:**
-  - Running `check` with `dir=<path>` from a **different current working
-    directory** is unsafe when bit rot is found (see §4).
   - Options must follow an explicit `check` (e.g. `bit_backup quick=true`
     alone is treated as an unknown command and errors out).
-  - `quick` mode intentionally does not detect silent rot for non-locked files.
+  - `quick` mode intentionally does not detect previously unknown silent rot for
+    non-locked files; files already marked corrupt are still verified.
 
 ---
 
 ## 3. Recent changes (most recent first)
 
+- **Working tree:** partial `scrub` now rounds a positive percentage up to at
+  least one file and advances `LAST_CHECK_DATE` only for files actually hashed,
+  so repeated runs rotate through the collection. Already known corruption is
+  still checked in quick mode. Check arguments reject unknown names and invalid
+  values; `dir=` preserves embedded `=`. Metadata ignore rules cannot be
+  overridden by `!` negation. Regression tests cover each case.
+- **Working tree:** fixed `dir=` bit-rot summary/report path resolution and
+  relative-path scanning, and implemented `bitbackupindex=true` in the active scanner. The index is a
+  semicolon-delimited CSV with `path;size;sha512`, one included file per row.
+  `CheckCommandCliOutputsTests.cpp` covers both regressions, including CSV
+  quoting, a relative `dir=`, and a second index run that must not index its own output.
 - `6eaae6b` **Feature:** `check confirm=delete` interactively asks, per
   "locked file deleted" violation, whether to permanently remove it from the
   DB (`y` removes it — even overriding an active lock — anything else/EOF
@@ -107,44 +119,29 @@ repo state (branch `develop`, HEAD `6eaae6b`) and observed build/test behavior.
 - `c457f6a` Batched SQLite writes (single connection, transactions); re-enabled
   the GTest target; fixed a CMake bug where `Main.cpp` leaked into the core lib.
 
-Only untracked file: `.bitbackupignore` in the repo root (pre-existing, not part
-of this work).
+The working tree also contains the `web/` presentation; inspect `git status`
+before resuming.
 
 ---
 
-## 4. Current blocker / main problem
+## 4. Resolved correctness issues
 
 There is **no build or test blocker** — everything builds and `ctest` is green.
 
-The most important **open correctness issue** is CWD-relative path handling in
-the bit-rot summary and the CSV report:
-
-- **Symptom:** when `check` is run with `dir=<somewhere-else>` from a different
-  process working directory AND bit rot is found, the summary re-hash throws
-  `File does not exist` (caught by `main` → prints `Error:` and exits 1) instead
-  of printing the bit-rot report. With `report=true` the report rows are also
-  computed against the wrong path.
-- **Failing command (manual repro):** from `/tmp`, run
-  `bit_backup check dir=/path/with/bitrot report=true` — the summary/report
-  re-hash resolves `./<relativepath>` against `/tmp`, not against `dir=`.
-- **Failing test:** none yet — the existing e2e tests `chdir` into the fixture
-  dir, so they never exercise the `dir=` + foreign-CWD path. **Needs a test.**
-- **Affected files/modules:** `src/BitBackup/Commands/CheckCommand.cpp`
-  — the summary loop inside `run()` and `part9CreateReportCsvIfNeeded`, both of
-  which build `File("./" + f.absolutePath)`.
-- **Suspected cause:** those two spots use `"./" + absolutePath` (process CWD)
-  instead of `bitBackupContext.getWorkingDirectory() + "/" + absolutePath`
-  (which part8's detection already uses correctly).
-- **Already tried:** nothing fixed yet; identified by code inspection. part8's
-  actual detection/DB update is correct; only the human-facing summary/report
-  use the wrong base path.
+- **Foreign-CWD `dir=` bit rot:** the terminal summary and CSV report now join
+  stored relative file paths to the scanned directory. The regression test
+  stays in its original CWD, corrupts a file without changing its mtime, and
+  checks both output hashes and the report contents. The scanner also computes
+  relative file paths correctly when `dir=` itself is relative.
+- **Missing `bitbackupindex=true` file:** the active scanner now writes
+  `.bitbackupindex.csv` with deterministic file order, relative paths, sizes,
+  and SHA-512 hashes. Ignored files and Bit Backup metadata stay out of it.
+  Index generation reads every included file, even with `quick=true`.
 
 ---
 
 ## 5. Known bugs and limitations
 
-- **CONFIRMED BUG:** bit-rot summary + `part9` report use `"./" + absolutePath`
-  (CWD-relative) — wrong/throws when `dir=` differs from the process CWD. See §4.
 - **CONFIRMED (UX wart):** the first CLI argument is always the command, so
   options without `check` (`bit_backup quick=true`) error with
   "Invalid command!". Documented in README; not yet softened.
@@ -175,7 +172,7 @@ the bit-rot summary and the CSV report:
   `std::exception` and maps a non-empty `check` result to exit code 1.
 - **Check flow (`CheckCommand::run`, parts 1–10):**
   1 verify DB self-hash · 2 migrate schema · 3 update version · 4 scan filesystem
-  (collects ignore + lock roots) · 5 load DB rows · 6 add new files (parallel
+  (collects ignore + lock roots and optionally writes the file index) · 5 load DB rows · 6 add new files (parallel
   hash) · 7 remove deleted (lock-aware) · 8 compare content/modtime (parallel
   hash, lock-aware) · 9 optional CSV report · 10 recompute DB self-hash.
 - **Key modules:** `Core/BitBackupIgnoreRegex` (precompiled patterns,
@@ -230,12 +227,10 @@ cd build && ctest --output-on-failure
 # Run a single test group
 ./build/Tests --gtest_filter='CheckCommandLockTest.*'
 ./build/Tests --gtest_filter='CheckCommandBitRotTest.*'
+./build/Tests --gtest_filter='CheckCommandCliOutputsTest.*'
 
-# Reproduce the §4 bug (run from a DIFFERENT cwd than the data dir):
-#   1) make a dir D with a file, run check inside D to index it
-#   2) corrupt the file's bytes but restore its old mtime (silent rot)
-#   3) from /tmp:  /abs/path/build/bit_backup check dir=D report=true
-#      -> expect: should report bit rot; actually errors on a wrong "./path"
+# Foreign-CWD regression: use check dir=D report=true from another directory
+# after silently corrupting a file in D. The terminal and CSV hashes must match.
 
 # Lock demo (frozen directory):
 #   index a dir, then `touch <dir>/subdir/.bitbackuplock`, run check again,
@@ -255,28 +250,13 @@ No linter/formatter is configured in the repo.
 
 ## 8. Next smallest tasks (ordered)
 
-1. **Add a failing test for the `dir=` + foreign-CWD bit-rot path.**
-   - Goal: lock in the §4 bug with a red test before fixing.
-   - Files: new `tests/BitBackup/Commands/CheckCommandDirArgTests.cpp` (do NOT
-     `chdir`; pass `dir=<temp>` while CWD stays elsewhere; cause silent rot).
-   - Verify: `cd build && ctest` — the new test should FAIL initially.
-
-2. **Fix CWD-relative paths in the summary + report.**
-   - Goal: use the working directory instead of `"./"` so `dir=` works from any CWD.
-   - Files: `src/BitBackup/Commands/CheckCommand.cpp` — the bit-rot summary loop
-     in `run()` and `part9CreateReportCsvIfNeeded` (replace `"./" + f.absolutePath`
-     with `bitBackupContext.getWorkingDirectory()` / `bitBackupFiles.workingDir`
-     joined paths).
-   - Verify: the task-1 test now PASSES; `ctest` stays 49+/all green; golden
-     scenario still identical.
-
-3. **Remove the unused `filesToBeRemovedFromDb` parameter from part8.**
+1. **Remove the unused `filesToBeRemovedFromDb` parameter from part8.**
    - Goal: kill a dead parameter and its warning.
    - Files: `CheckCommand.cpp` / `CheckCommand.h` (signature + the single caller
      in `run()`).
    - Verify: `cmake --build build` clean; `ctest` green.
 
-4. **Make options-without-`check` not error (small UX fix) — OPTIONAL.**
+2. **Make options-without-`check` not error (small UX fix) — OPTIONAL.**
    - Goal: `bit_backup quick=true` should behave like `check quick=true`
      (or at least exit cleanly). Decide semantics first.
    - Files: `Core/BitBackupArgs.cpp` (command detection) and/or
@@ -297,9 +277,8 @@ No linter/formatter is configured in the repo.
   tests and checking the migration/DB compatibility path.
 - **Do not change the default (unlocked, no-flag) `check` behavior** without
   re-running the golden scenario; it must stay identical.
-- **No new subcommands** (e.g. `lock`/`unlock`/`status`) until §4 is fixed.
-  (`check confirm=delete` added in `6eaae6b` is a `check` *option*, not a new
-  subcommand, so it doesn't violate this — keep future additions the same way.)
+- **No new subcommands** (e.g. `lock`/`unlock`/`status`) without a concrete
+  request; `check confirm=delete` is a `check` option.
 - **Do not "fix" the embedded git PAT in code** — that's an owner/ops action
   (rotate + credential helper), not a source change.
 
@@ -308,22 +287,17 @@ No linter/formatter is configured in the repo.
 ## 10. Resume prompt (copy-paste for a future Claude Code session)
 
 ```
-Read NEXT.md in the repo root first. Work only on "Next smallest task #1"
-(and then #2) from it: add a failing test that runs `check` with dir=<temp>
-from a different current working directory and triggers silent bit rot, then
-fix the CWD-relative "./"+absolutePath usage in CheckCommand.cpp's run()
-summary and part9CreateReportCsvIfNeeded so it uses the working directory.
-
-Inspect only the files needed for that task (CheckCommand.cpp/.h and the
-existing CheckCommandBitRotTests.cpp as a template). Do not refactor unrelated
-code, do not change the migrations array, do not switch to WAL, and do not
-alter default unlocked check behavior. Make one small, verified change.
+Read NEXT.md in the repo root first. The foreign-CWD bit-rot and missing index
+bugs have regression tests and are fixed. For the next task, remove the unused
+`filesToBeRemovedFromDb` parameter from part8 without refactoring unrelated
+code. Do not change the migrations array, switch to WAL, or alter default
+unlocked check behavior.
 
 Build and test with:
   cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=ON
   cmake --build build -j"$(nproc)"
   cd build && ctest --output-on-failure
 
-Confirm the new test goes red-then-green and that the golden default behavior
-is unchanged. Then update NEXT.md (move the finished task out, refresh status).
+Confirm the full test suite and golden default behavior remain green. Then
+update NEXT.md with the observed result.
 ```

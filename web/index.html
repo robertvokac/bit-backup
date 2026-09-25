@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0c1b22" />
+    <meta
+      name="description"
+      content="Bit Backup is an open-source command-line tool that uses SHA-512 and a local SQLite database to detect silent file corruption."
+    />
+    <title>Bit Backup — Know your files are still your files</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./main.js" defer></script>
+  </head>
+  <body id="top">
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="dark-intro">
+      <header class="site-header shell">
+        <a class="brand" href="#top" aria-label="Bit Backup, back to top">
+          <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span>bit<span class="brand-accent">backup</span></span>
+        </a>
+        <nav class="site-nav" aria-label="Main navigation">
+          <a href="#how-it-works">How it works</a>
+          <a href="#modes">Run modes</a>
+          <a href="#cli-reference">CLI reference</a>
+          <a href="#get-started">Get started</a>
+        </nav>
+        <a class="header-link" href="https://github.com/robertvokac/bit-backup" target="_blank" rel="noopener noreferrer">
+          GitHub <span aria-hidden="true">↗</span>
+        </a>
+      </header>
+
+      <main id="main">
+        <section class="hero shell" aria-labelledby="hero-title">
+          <div class="hero-copy">
+            <p class="eyebrow"><span class="eyebrow-line"></span> OPEN-SOURCE FILE INTEGRITY</p>
+            <h1 id="hero-title">Know your files are <em>still your files.</em></h1>
+            <p class="hero-lead">
+              Bit Backup records SHA-512 fingerprints in a local database and checks them again over time, helping you spot silent corruption in the files you keep.
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#get-started">Get started <span aria-hidden="true">↗</span></a>
+              <a class="text-link" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
+            </div>
+            <p class="hero-footnote">Local by design <span aria-hidden="true">·</span> MIT licensed <span aria-hidden="true">·</span> Built with C++23</p>
+          </div>
+
+          <div class="hero-graphic" role="img" aria-label="Bit Backup process: scan files, store SHA-512 fingerprints locally, then verify them on later runs">
+            <div class="graphic-topline"><span>INTEGRITY WORKFLOW</span><span>01 / 03</span></div>
+            <div class="workflow-stage stage-files">
+              <span class="stage-number">01</span>
+              <div class="stage-content">
+                <span class="stage-label">SCAN</span>
+                <strong>Your file collection</strong>
+                <span class="stage-detail">Choose a directory to check</span>
+              </div>
+              <span class="stage-symbol" aria-hidden="true">/</span>
+            </div>
+            <div class="workflow-connector" aria-hidden="true"><span></span></div>
+            <div class="workflow-stage stage-hash">
+              <span class="stage-number">02</span>
+              <div class="stage-content">
+                <span class="stage-label">RECORD</span>
+                <strong>SHA-512 fingerprints</strong>
+                <span class="stage-detail">Stored in local SQLite</span>
+              </div>
+              <span class="hash-mark" aria-hidden="true">#</span>
+            </div>
+            <div class="workflow-connector" aria-hidden="true"><span></span></div>
+            <div class="workflow-stage stage-verify">
+              <span class="stage-number">03</span>
+              <div class="stage-content">
+                <span class="stage-label">VERIFY</span>
+                <strong>Check again later</strong>
+                <span class="stage-detail">Find unexpected changes</span>
+              </div>
+              <span class="verify-mark" aria-hidden="true">✓</span>
+            </div>
+            <div class="graphic-bottomline"><span>THE BASELINE STAYS WITH YOUR FILES</span><span class="graphic-pulse" aria-hidden="true"></span></div>
+          </div>
+        </section>
+
+        <div class="technology-bar" aria-label="Core technologies">
+          <div class="shell technology-inner">
+            <span>Built for the long view</span>
+            <ul>
+              <li>SHA-512</li>
+              <li>SQLite</li>
+              <li>C++23</li>
+              <li>MIT License</li>
+            </ul>
+          </div>
+        </div>
+
+        <section class="section section-how" id="how-it-works" aria-labelledby="how-title">
+          <div class="shell">
+          <div class="section-intro">
+            <p class="section-kicker">01 / THE IDEA</p>
+            <h2 id="how-title">A record you can check against.</h2>
+            <p>Files can change without an obvious warning. Bit Backup gives you a local reference point, then compares future scans with that record.</p>
+          </div>
+          <div class="steps" aria-label="Three steps of an integrity check">
+            <article class="step">
+              <div class="step-head"><span>01</span><span class="step-arrow" aria-hidden="true">↗</span></div>
+              <h3>Establish a baseline</h3>
+              <p>Scan a directory. Bit Backup calculates file hashes and saves metadata in a local SQLite database.</p>
+            </article>
+            <article class="step">
+              <div class="step-head"><span>02</span><span class="step-arrow" aria-hidden="true">↗</span></div>
+              <h3>Return and verify</h3>
+              <p>Run it again to compare file contents with the stored record. A full check rehashes files, including those with unchanged modification times.</p>
+            </article>
+            <article class="step">
+              <div class="step-head"><span>03</span><span class="step-arrow" aria-hidden="true">↗</span></div>
+              <h3>Investigate changes</h3>
+              <p>See detected corruption and lock violations in the terminal, with optional CSV reports for a closer look.</p>
+            </article>
+          </div>
+          </div>
+        </section>
+
+        <section class="section section-features" id="features" aria-labelledby="features-title">
+          <div class="shell">
+            <div class="section-heading-row">
+              <div>
+                <p class="section-kicker">02 / THE TOOLKIT</p>
+                <h2 id="features-title">The right check for the moment.</h2>
+              </div>
+              <p>Start with a complete verification. For large collections, choose how much work each later run should do.</p>
+            </div>
+            <div class="feature-grid">
+              <article class="feature-card feature-card-highlight">
+                <div class="feature-top"><span class="feature-index">01 / VERIFY</span><span class="feature-icon" aria-hidden="true">◎</span></div>
+                <h3>Check every byte</h3>
+                <p>The default full check rehashes files, so corruption can be found even when modification times have not changed.</p>
+                <span class="feature-tag">DEFAULT MODE</span>
+              </article>
+              <article class="feature-card">
+                <div class="feature-top"><span class="feature-index">02 / SCALE</span><span class="feature-icon" aria-hidden="true">↗</span></div>
+                <h3>Work at your pace</h3>
+                <p>Use a quick scan or a rotating scrub for large collections. Automatic worker selection adapts to the detected storage type on Linux.</p>
+                <span class="feature-tag">QUICK · SCRUB · THREADS</span>
+              </article>
+              <article class="feature-card">
+                <div class="feature-top"><span class="feature-index">03 / FREEZE</span><span class="feature-icon" aria-hidden="true">⌑</span></div>
+                <h3>Protect archived trees</h3>
+                <p>Add a <code>.bitbackuplock</code> marker after indexing to keep a directory’s saved state fixed and report additions, edits, or deletions.</p>
+                <span class="feature-tag">DIRECTORY LOCKING</span>
+              </article>
+              <article class="feature-card">
+                <div class="feature-top"><span class="feature-index">04 / FOCUS</span><span class="feature-icon" aria-hidden="true">≡</span></div>
+                <h3>Keep the signal clear</h3>
+                <p>Exclude paths with <code>.bitbackupignore</code>, export CSV reports and a full file index, and verify the local database with its own checksum.</p>
+                <span class="feature-tag">IGNORE RULES · CSV</span>
+              </article>
+            </div>
+            <div class="honest-note"><span class="note-icon" aria-hidden="true">i</span><p><strong>A check is not a copy.</strong> Bit Backup verifies integrity; it does not create or restore backups. Keep separate copies of important files.</p></div>
+          </div>
+        </section>
+
+        <section class="section section-modes" id="modes" aria-labelledby="modes-title">
+          <div class="shell">
+            <div class="section-heading-row mode-heading">
+              <div>
+                <p class="section-kicker">03 / RUN MODES</p>
+                <h2 id="modes-title">Three ways to check your files.</h2>
+              </div>
+              <p>Use a full check for complete coverage on each run, or select how much unchanged data to revisit. Examples assume you have set <code>BIT_BACKUP</code> as shown in Get started and are inside the data directory.</p>
+            </div>
+            <div class="run-mode-grid">
+              <article class="run-mode-card">
+                <div class="run-mode-top"><span>01 / DEFAULT</span><span class="mode-badge">FULL</span></div>
+                <h3>Full verification</h3>
+                <p>Hashes every tracked file on each run. If file contents change while the modification time stays the same, the changed hash is reported as bit rot.</p>
+                <div class="mode-code-head"><span>Run</span><button class="copy-button" type="button" data-copy-target="full-command" aria-live="polite">Copy</button></div>
+                <pre><code id="full-command">"$BIT_BACKUP"</code></pre>
+                <p class="mode-detail">Equivalent to <code>"$BIT_BACKUP" check</code> or <code>"$BIT_BACKUP" check scrub=100</code>.</p>
+              </article>
+              <article class="run-mode-card">
+                <div class="run-mode-top"><span>02 / FASTEST</span><span class="mode-badge">QUICK</span></div>
+                <h3>Quick scan</h3>
+                <p>Hashes new files and files whose modification times changed. It usually skips unchanged-time files, so previously unknown silent corruption in those files is not detected on this run.</p>
+                <div class="mode-code-head"><span>Run</span><button class="copy-button" type="button" data-copy-target="quick-command" aria-live="polite">Copy</button></div>
+                <pre><code id="quick-command">"$BIT_BACKUP" check quick=true</code></pre>
+                <p class="mode-detail">Equivalent to <code>scrub=0</code>. Locked files and files already marked corrupt are still verified.</p>
+              </article>
+              <article class="run-mode-card">
+                <div class="run-mode-top"><span>03 / ROTATING</span><span class="mode-badge">SCRUB</span></div>
+                <h3>Partial scrub</h3>
+                <p>Selects the oldest share of stored records for rehashing, while also hashing new and changed-time files. Repeated runs rotate coverage through the collection.</p>
+                <div class="mode-code-head"><span>Run</span><button class="copy-button" type="button" data-copy-target="scrub-command" aria-live="polite">Copy</button></div>
+                <pre><code id="scrub-command">"$BIT_BACKUP" check scrub=25</code></pre>
+                <p class="mode-detail">Choose any percentage from <code>0</code> to <code>100</code>. A positive percentage rounds up to at least one previously indexed file. A 25% scrub does not check every file on that run.</p>
+              </article>
+            </div>
+            <div class="mode-rule"><strong>How modes interact</strong><p><code>quick=true</code> takes priority over <code>scrub=N</code> and makes it a 0% scrub. Locked files and files already marked corrupt are always hashed. In unlocked directories, a changed modification time is treated as an ordinary edit and its new hash becomes the saved baseline.</p></div>
+          </div>
+        </section>
+
+        <section class="section section-reference" id="cli-reference" aria-labelledby="reference-title">
+          <div class="shell">
+            <div class="section-intro reference-intro">
+              <p class="section-kicker">04 / CLI REFERENCE</p>
+              <h2 id="reference-title">Every check option, explained.</h2>
+              <p>Put options after the explicit <code>check</code> command, separated by spaces: <code>"$BIT_BACKUP" check key=value</code>. Running the executable with no arguments performs a default full check of the current directory. Unknown options and invalid values produce an error.</p>
+            </div>
+            <div class="reference-table-wrap">
+              <table class="reference-table">
+                <caption class="visually-hidden">All check command options, values, defaults and effects</caption>
+                <thead><tr><th scope="col">Option</th><th scope="col">Value</th><th scope="col">Default</th><th scope="col">What it does</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row"><code>dir</code></th><td>Absolute or relative path</td><td>Current directory</td><td>Chooses the directory to scan and where the local database and reports are stored. Relative paths are resolved from the shell’s working directory.</td></tr>
+                  <tr><th scope="row"><code>quick</code></th><td><code>true</code> or <code>false</code></td><td><code>false</code></td><td>With <code>true</code>, skips rehashing unchanged-time, unlocked files unless already marked corrupt. It overrides <code>scrub</code> to 0%.</td></tr>
+                  <tr><th scope="row"><code>scrub</code></th><td><code>0</code>–<code>100</code></td><td><code>100</code></td><td>Selects the oldest N% of stored records for rehashing, rounding up to at least one file when N is positive. <code>0</code> is quick behavior; <code>100</code> is a full check.</td></tr>
+                  <tr><th scope="row"><code>threads</code></th><td><code>1</code>–<code>16</code></td><td>Automatic</td><td>Sets hashing workers manually. On Linux, automatic selection uses 1 for HDD or unknown storage, up to 4 for SSD and up to 16 for NVMe, bounded by available CPUs.</td></tr>
+                  <tr><th scope="row"><code>report</code></th><td><code>true</code> or <code>false</code></td><td><code>false</code></td><td>With <code>true</code>, writes <code>.bitbackupreport.csv</code> for detected bit rot. Lock violations are reported in the terminal, not this CSV.</td></tr>
+                  <tr><th scope="row"><code>verbose</code></th><td><code>true</code> or <code>false</code></td><td><code>false</code></td><td>Prints more detailed scan information, including file listings.</td></tr>
+                  <tr><th scope="row"><code>bitbackupindex</code></th><td><code>true</code> or <code>false</code></td><td><code>false</code></td><td>With <code>true</code>, writes <code>.bitbackupindex.csv</code> containing each included file’s relative path, size in bytes, and SHA-512 hash.</td></tr>
+                  <tr><th scope="row"><code>confirm</code></th><td><code>delete</code></td><td>Off</td><td>Interactively asks whether to remove each deleted locked file from the stored database. It does not confirm modified or newly added files.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="reference-notes">
+              <p><strong>Directory paths.</strong> <code>dir=/path/to/data</code> selects a collection regardless of the shell’s current directory. Bit Backup writes its metadata and requested CSV files into the selected directory.</p>
+              <p><strong>Index cost.</strong> An index run hashes every included file to produce its SHA-512 column. This extra read happens even with <code>quick=true</code> or a partial scrub.</p>
+            </div>
+            <div class="recipes-heading"><p class="section-kicker">EXAMPLE COMMANDS</p><h3>Combine options to suit the job.</h3><p>The commands below use the executable path set during the build steps.</p></div>
+            <div class="recipe-grid">
+              <article class="recipe-card"><h4>Detailed full check</h4><pre><code>"$BIT_BACKUP" check verbose=true report=true</code></pre><p>Rehash every file, print detailed progress, and write a CSV report of any bit rot.</p></article>
+              <article class="recipe-card"><h4>Bounded routine scan</h4><pre><code>"$BIT_BACKUP" check scrub=20 threads=8</code></pre><p>Recheck the oldest 20% of unchanged-time files with eight hashing workers.</p></article>
+              <article class="recipe-card"><h4>Resolve a locked deletion</h4><pre><code>"$BIT_BACKUP" check confirm=delete</code></pre><p>After a locked file is deleted, answer each prompt to keep its violation or remove its saved row.</p></article>
+              <article class="recipe-card"><h4>Target a directory</h4><pre><code>"$BIT_BACKUP" check dir=/path/to/data report=true</code></pre><p>Scan a chosen path from elsewhere. Both the bit-rot report and integrity database are written into that directory.</p></article>
+              <article class="recipe-card"><h4>Export a file index</h4><pre><code>"$BIT_BACKUP" check bitbackupindex=true</code></pre><p>Create <code>.bitbackupindex.csv</code> with relative path, byte size and current SHA-512 hash for each included file.</p></article>
+              <article class="recipe-card"><h4>Ask the CLI</h4><pre><code>"$BIT_BACKUP" help
+"$BIT_BACKUP" version</code></pre><p>Show the built-in usage text or the current version string without running a file check.</p></article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-details" id="details" aria-labelledby="details-title">
+          <div class="shell">
+            <div class="section-intro"><p class="section-kicker">05 / IN PRACTICE</p><h2 id="details-title">What happens around a check.</h2><p>A few operational details help you interpret the result and keep your baseline useful.</p></div>
+            <div class="details-grid">
+              <article class="detail-card"><span class="detail-number">01 / BASELINE</span><h3>New and edited files</h3><p>The first run records hashes. Later runs add new files and update the stored hash of an unlocked file whose modification time changed. Bit rot is flagged when a full or partial check finds different content with an unchanged modification time.</p></article>
+              <article class="detail-card"><span class="detail-number">02 / LOCKING</span><h3>Freeze a directory</h3><p>Index the files first, then add an empty <code>.bitbackuplock</code> file in the directory to freeze it. Subsequent runs keep saved hashes and timestamps fixed, and report modified, new, or deleted files in that subtree. Remove the marker to resume normal updates.</p><pre><code>touch archive/.bitbackuplock
+"$BIT_BACKUP" check</code></pre></article>
+              <article class="detail-card"><span class="detail-number">03 / IGNORE RULES</span><h3>Scan only what matters</h3><p>Place <code>.bitbackupignore</code> in the scanned root. Patterns support <code>*</code>, <code>?</code>, root-anchored paths such as <code>/logs/</code>, directory rules ending in <code>/</code>, and <code>!</code> to re-include a path. Bit Backup metadata remains excluded even with a <code>!</code> rule. Only the root ignore file is loaded.</p><pre><code>/logs/
+*.tmp
+!important.tmp</code></pre></article>
+              <article class="detail-card"><span class="detail-number">04 / OUTPUT</span><h3>Read the result</h3><p>The directory holds <code>.bitbackup.sqlite3</code> and its <code>.sha512</code> checksum. <code>report=true</code> adds a CSV for bit rot. A check exits with a nonzero code when it detects bit rot or a lock violation, making it usable in scripts.</p></article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-start" id="get-started" aria-labelledby="start-title">
+          <div class="shell start-grid">
+            <div class="start-copy">
+              <p class="section-kicker">06 / GET STARTED</p>
+              <h2 id="start-title">Make your first baseline.</h2>
+              <p>Build from source, move into the directory you want to monitor, and run your first check. Later runs compare against the local record.</p>
+              <div class="requirements"><span>YOU'LL NEED</span><p>A C++23 compiler, CMake 3.25+, OpenSSL, and SQLite3. The SQLiteCpp dependency is included as a Git submodule.</p></div>
+              <a class="text-link dark-text-link" href="https://github.com/robertvokac/bit-backup#readme" target="_blank" rel="noopener noreferrer">Read the full documentation <span aria-hidden="true">↗</span></a>
+            </div>
+            <div class="install-card">
+              <div class="install-card-top"><span>01 — BUILD &amp; RUN</span><button class="copy-button copy-button-light" type="button" data-copy-target="install-commands" aria-live="polite">Copy steps</button></div>
+              <pre><code id="install-commands">git clone --recurse-submodules https://github.com/robertvokac/bit-backup.git
+cd bit-backup
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
+BIT_BACKUP="$PWD/build/bit_backup"
+cd /path/to/data
+"$BIT_BACKUP"</code></pre>
+              <p>Replace <code>/path/to/data</code> with your directory. By default, <code>bit_backup</code> checks the current directory. Run it again later to verify the saved baseline.</p>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="site-footer shell">
+        <div><a class="brand footer-brand" href="#top"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>bit<span class="brand-accent">backup</span></span></a><p>Keep a trustworthy record of what you keep.</p></div>
+        <div class="footer-links"><a href="https://github.com/robertvokac/bit-backup" target="_blank" rel="noopener noreferrer">Source code ↗</a><a href="https://github.com/robertvokac/bit-backup#readme" target="_blank" rel="noopener noreferrer">Documentation ↗</a><a href="https://github.com/robertvokac/bit-backup/blob/develop/LICENSE" target="_blank" rel="noopener noreferrer">MIT license ↗</a></div>
+        <p class="footer-bottom">Bit Backup · Open source under the MIT License</p>
+      </footer>
+    </div>
+  </body>
+</html>

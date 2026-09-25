@@ -48,10 +48,6 @@ namespace BitBackup::Core {
     public:
         explicit BitBackupArgs(const std::vector<std::string> &args);
 
-    private:
-        std::vector<std::string> split(const std::string &s, char delim);
-
-    public:
         bool hasArgument(const std::string &arg) const;
         void addArgument(const string &arg, const string &value);
 

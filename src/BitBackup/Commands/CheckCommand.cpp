@@ -61,6 +61,7 @@
 #include <random>
 #include <algorithm>
 #include <atomic>
+#include <fstream>
 #include <mutex>
 #include <thread>
 #include <unordered_set>
@@ -84,6 +85,18 @@ namespace BitBackup::Commands {
     using std::string;
 
     namespace {
+        std::string csvField(const std::string& value) {
+            if (value.find_first_of(";\"\r\n") == std::string::npos) return value;
+
+            std::string escaped = "\"";
+            for (const char c : value) {
+                if (c == '"') escaped += '"';
+                escaped += c;
+            }
+            escaped += '"';
+            return escaped;
+        }
+
         // Run fn(i) for i in [0, count) across `threads` worker threads.
         // fn MUST be thread-safe and only touch per-index state. threads<=1 runs
         // sequentially (and reproduces the old single-threaded behavior exactly).
@@ -224,7 +237,7 @@ namespace BitBackup::Commands {
                     << "Bit rot detected: \"" << f.absolutePath << "\""
                     << " expected_sha512=" << f.hashSumValue
                     << " returned_sha512="
-                    << Core::Utils::calculateSHA512Hash(File("./" + f.absolutePath))
+                    << Core::Utils::calculateSHA512Hash(File(bitBackupFiles.workingDirAbsolutePath) / f.absolutePath)
                     << RST << std::endl;
                 }
             }
@@ -359,6 +372,7 @@ namespace BitBackup::Commands {
         // so recomputing them per file was ~2 wasted absolute() calls per file.
         const auto dbAbs = std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3File).string();
         const auto dbShaAbs = std::filesystem::absolute(bitBackupFiles.bitBackupSQLite3FileSha512).string();
+        const auto indexAbs = std::filesystem::absolute(bitBackupFiles.bitbackupindex).string();
 
         std::vector<File> found;
 
@@ -368,8 +382,9 @@ namespace BitBackup::Commands {
         const std::filesystem::recursive_directory_iterator end;
         for (; it != end; ++it) {
             const auto& e = *it;
-            const auto abs = e.path().string();
-            const auto rel = abs.substr(rootAbs.size() + 1);
+            const File absolutePath = std::filesystem::absolute(e.path());
+            const auto abs = absolutePath.string();
+            const auto rel = absolutePath.lexically_relative(File(rootAbs)).generic_string();
 
             if (std::filesystem::is_directory(e)) {
                 // Prune directories whose entire contents are ignored so we never
@@ -399,6 +414,8 @@ namespace BitBackup::Commands {
                 continue;
             if (abs == dbShaAbs)
                 continue;
+            if (abs == indexAbs)
+                continue;
 
             if (bitBackupFiles.bitBackupIgnoreRegex->test(rel))
                 continue;
@@ -415,10 +432,30 @@ namespace BitBackup::Commands {
             return a.generic_string() < b.generic_string();
         });
 
+        if (bitBackupArgs.isBitBackupIndexEnabled()) {
+            std::ofstream index(bitBackupFiles.bitbackupindex, std::ios::binary | std::ios::trunc);
+            if (!index) {
+                throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
+            }
+
+            index << "path;size;sha512\n";
+            for (const File& file : found) {
+                const std::string relativePath =
+                    std::filesystem::absolute(file).lexically_relative(rootAbs).generic_string();
+                index << csvField(relativePath) << ';'
+                      << std::filesystem::file_size(file) << ';'
+                      << Core::Utils::calculateSHA512Hash(file) << '\n';
+            }
+            index.close();
+            if (!index) {
+                throw Core::BitBackupException("Writing to file failed: " + bitBackupFiles.bitbackupindex.string());
+            }
+        }
+
         return Core::ListSet<File>(
             std::move(found),
             [rootAbs](const File& f) {
-                return std::filesystem::absolute(f).string().substr(rootAbs.size() + 1);
+                return std::filesystem::absolute(f).lexically_relative(File(rootAbs)).generic_string();
             }
         );
     }
@@ -741,6 +778,7 @@ namespace BitBackup::Commands {
         vector<FsFile> filesToUpdateLastCheckDate;
         vector<FsFile> filesToUpdate;
         int contentAndModTimeWereChanged = 0;
+        std::size_t filesSkippedHash = 0;
 
         // Build the work list of files still present on disk. missingFromDiskIds
         // (filled by part7) covers both normal deletions and locked deletions
@@ -768,10 +806,12 @@ namespace BitBackup::Commands {
             vector<const FsFile*> byAge = work;
             std::sort(byAge.begin(), byAge.end(),
                       [](const FsFile* a, const FsFile* b) {
-                          return a->lastCheckDate < b->lastCheckDate;
+                          if (a->lastCheckDate != b->lastCheckDate)
+                              return a->lastCheckDate < b->lastCheckDate;
+                          return a->absolutePath < b->absolutePath;
                       });
             const std::size_t scrubCount =
-                static_cast<std::size_t>(byAge.size() * (scrubPercent / 100.0));
+                (byAge.size() * static_cast<std::size_t>(scrubPercent) + 99) / 100;
             for (std::size_t i = 0; i < scrubCount; ++i) forceHash.insert(byAge[i]);
         }
 
@@ -806,6 +846,7 @@ namespace BitBackup::Commands {
 
                 bool needsHash;
                 if (r.locked)                 needsHash = true;   // frozen -> always verify
+                else if (f.lastCheckResult == "KO") needsHash = true; // keep known corruption visible
                 else if (scrubPercent >= 100) needsHash = true;   // full (default)
                 else if (r.modtimeChanged)    needsHash = true;   // changed -> must rehash
                 else if (scrubPercent <= 0)   needsHash = false;  // quick
@@ -875,6 +916,7 @@ namespace BitBackup::Commands {
                 } else {
                     fileInDb.lastCheckResult = "OK";
                     if (fileInDb.size == 0) {
+                        fileInDb.lastCheckDate = nowStr;
                         fileInDb.size = r.size;
                         fileInDb.locked = 0;
                         filesToUpdate.push_back(fileInDb);
@@ -884,14 +926,14 @@ namespace BitBackup::Commands {
                 }
             } else {
                 // Hash skipped (quick mode / not in this run's scrub subset):
-                // modtime unchanged, so assume OK without a bit-rot check.
-                fileInDb.lastCheckResult = "OK";
+                // Preserve the last hash date and verdict: this run did not
+                // verify the file's bytes. Advancing the date prevents scrub
+                // from rotating to other files on later runs.
+                ++filesSkippedHash;
                 if (fileInDb.size == 0) {
                     fileInDb.size = r.size;
                     fileInDb.locked = 0;
                     filesToUpdate.push_back(fileInDb);
-                } else {
-                    filesToUpdateLastCheckDate.push_back(fileInDb);
                 }
             }
         }
@@ -916,8 +958,9 @@ namespace BitBackup::Commands {
 
         cout << "Part 8: Updating files - content and last modification date were changed: "
         << contentAndModTimeWereChanged << std::endl;
-        cout << "Part 8: Updating files - content and last modification date were not changed: "
-        <<filesToUpdateLastCheckDate.size() << std::endl;
+        cout << "Part 8: Hashed existing files: "
+             << hashedSoFar.load()
+             << "; skipped hashing: " << filesSkippedHash << std::endl;
         string nowS = print_clock(now);
         bitBackupContext.getFileRepository()->updateLastCheckDate(nowS, filesToUpdateLastCheckDate);
 
@@ -956,7 +999,7 @@ namespace BitBackup::Commands {
             sb <<"file;expected;calculated" << std::endl;;
         }
         for (FsFile const &f: filesWithBitRot) {
-            File file("./" + f.absolutePath);
+            File file = File(bitBackupFiles.workingDirAbsolutePath) / f.absolutePath;
             sb << f.absolutePath
                     << ";"
                     << f.hashSumValue

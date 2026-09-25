@@ -52,15 +52,17 @@ The primary command is `check`, which scans the specified directory and updates 
 ### Arguments for `check`
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `dir`    | Path to the directory to be checked for bit rot. | `.` (Current) |
+| `dir`    | Absolute path, or a path relative to the process working directory, to the directory to be checked for bit rot. | `.` (Current) |
 | `report` | Set to `true` to generate a report file (`.bitbackupreport.csv`). | `false` |
 | `verbose`| Set to `true` to show detailed scan information. | `false` |
-| `bitbackupindex` | Set to `true` to generate a full file index (`.bitbackupindex.csv`). | `false` |
+| `bitbackupindex` | Set to `true` to generate a CSV index (`.bitbackupindex.csv`) of included files with relative path, size in bytes, and SHA-512 hash. This hashes every included file in addition to the normal check. | `false` |
 | `threads` | Explicit number of hashing workers (`1`–`16`). Without this option, storage-aware automatic selection is used. | HDD/unknown: `1`; SSD: up to `4`; NVMe: up to `16` |
-| `quick`  | `true` skips re-hashing files whose modification time is unchanged. Fast, but does **not** detect silent bit rot. | `false` |
-| `scrub`  | Re-hash only the oldest `N`% of unchanged-modtime files this run (rotating coverage, like a scrub). `100` = full check, `0` = same as `quick`. | `100` |
+| `quick`  | `true` skips re-hashing files whose modification time is unchanged, except files already marked corrupt and locked files. Fast, but does **not** detect new silent bit rot in skipped files. | `false` |
+| `scrub`  | Re-hash the oldest `N`% of stored files this run (rotating coverage, like a scrub). A positive percentage rounds up to at least one file. `100` = full check, `0` = same as `quick`. | `100` |
 
 > Note: options must follow the explicit `check` command, e.g. `bit_backup check quick=true threads=8`.
+
+Unknown options and invalid values fail with a non-zero exit code. Boolean values must be exactly `true` or `false`.
 
 ### Performance
 On Linux, bit-backup detects whether the filesystem containing `dir` is backed
@@ -69,16 +71,17 @@ underlying devices through dm-crypt, LVM, md, and similar block-device layers.
 A rotational drive (or storage whose type cannot be detected safely) uses one
 sequential hashing stream, an SSD uses up to four workers, and NVMe uses up to
 16, all bounded by the available CPU count. `threads=N` overrides this automatic
-choice and is capped at 16. The selected storage type, worker count, and whether
-it was automatic or manual are printed at startup.
+choice and must be between 1 and 16. The selected storage type, worker count,
+and whether it was automatic or manual are printed at startup.
 
 Files are processed in path order for better HDD locality, reads use 1 MiB
 chunks with a sequential-access hint on Linux, and all database
 inserts/updates/deletes are batched into single transactions. For routine runs
 over very large trees, `quick=true` (skip unchanged files) or `scrub=N` (verify
 a rotating slice each run) keep wall-clock bounded while `scrub` still
-eventually re-verifies everything. `quick=true` does not detect silent bit rot
-in files whose modification time is unchanged.
+eventually re-verifies everything. The stored last-check date advances only
+after a file is actually hashed. `quick=true` does not detect previously unknown
+silent bit rot in files whose modification time is unchanged.
 
 ### Excluding Files (`.bitbackupignore`)
 Create a file named `.bitbackupignore` in the root of your scanned directory.
@@ -107,7 +110,8 @@ build/
 
 bit-backup's own metadata files (`.bitbackup.sqlite3`, its `.sha512`,
 `.bitbackupignore`, `.bitbackupindex.csv`, `*.bitbackupreport.csv`,
-`.bitbackuplock`) are always excluded automatically.
+`.bitbackuplock`) are always excluded automatically, even if a `!` rule tries
+to re-include them.
 
 ### Locking Directories (`.bitbackuplock`)
 Drop an (empty) `.bitbackuplock` file into a directory to **freeze** that
@@ -132,7 +136,7 @@ The tool creates several hidden files in the target directory to manage its stat
 - `.bitbackup.sqlite3`: The database containing file metadata and hashes.
 - `.bitbackup.sqlite3.sha512`: A hash of the database to ensure its own integrity.
 - `.bitbackupreport.csv`: Generated when `report=true`, listing files with detected corruption.
-- `.bitbackupindex.csv`: Generated when `bitbackupindex=true`, containing a list of all scanned files.
+- `.bitbackupindex.csv`: Generated when `bitbackupindex=true`, containing the relative path, byte size, and SHA-512 hash of each included file as semicolon-delimited CSV.
 
 ## Developer Information
 

@@ -27,10 +27,21 @@
 #include <sstream>
 #include "BitBackup/Core/Utils.h"
 #include <string>
+#include <string_view>
 
 namespace BitBackup::Core {
 
     namespace {
+        bool isProtectedMetadataFile(const std::string& path) {
+            std::string_view name(path);
+            const auto slash = name.find_last_of('/');
+            if (slash != std::string_view::npos) name.remove_prefix(slash + 1);
+            return name.ends_with(".bitbackupreport.csv") ||
+                   name.ends_with(".bitbackupindex.csv") ||
+                   name.ends_with(".bitbackupignore") ||
+                   name.ends_with(".bitbackuplock");
+        }
+
         // Strip a trailing CR (so CRLF-edited ignore files work) and trailing
         // horizontal whitespace, mirroring .gitignore's handling of trailing
         // spaces. Without this, "*.log\r" never matches anything.
@@ -43,13 +54,8 @@ namespace BitBackup::Core {
     }
 
     BitBackupIgnoreRegex::BitBackupIgnoreRegex(const std::filesystem::path& bitBackupIgnoreFile) {
-        // Always ignore bit-backup's own metadata files so they never get
-        // tracked as regular content (the .sqlite3 / .sha512 files are skipped
-        // separately in the scan).
-        addPattern("*.bitbackupreport.csv", false);
-        addPattern("*.bitbackupindex.csv", false);
-        addPattern("*.bitbackupignore", false);
-        addPattern("*.bitbackuplock", false);
+        // Protected metadata is checked before user rules in isIgnored();
+        // a later negation must never make it regular tracked content.
         addBitBackupIgnoreFile(bitBackupIgnoreFile);
     }
 
@@ -118,6 +124,7 @@ namespace BitBackup::Core {
     }
 
     bool BitBackupIgnoreRegex::isIgnored(const std::string& text) const {
+        if (isProtectedMetadataFile(text)) return true;
         // Last matching pattern wins, so a later '!pattern' can re-include a
         // path ignored by an earlier rule (gitignore semantics).
         bool ignored = false;

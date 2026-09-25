@@ -23,11 +23,37 @@
 
 
 #include "BitBackup/Core/BitBackupArgs.h"
+#include <charconv>
+#include <stdexcept>
 using std::string;
 
 #include "BitBackup/Core/BitBackupCommand.h"
 
 namespace BitBackup::Core {
+
+    namespace {
+        void validateCheckOption(const string& key, const string& value) {
+            if (key == "dir") {
+                if (!value.empty()) return;
+            } else if (key == "report" || key == "verbose" ||
+                       key == "bitbackupindex" || key == "quick") {
+                if (value == "true" || value == "false") return;
+            } else if (key == "confirm") {
+                if (value == "delete") return;
+            } else if (key == "threads" || key == "scrub") {
+                int parsed = 0;
+                const auto [end, error] = std::from_chars(
+                    value.data(), value.data() + value.size(), parsed);
+                const int min = key == "threads" ? 1 : 0;
+                const int max = key == "threads" ? 16 : 100;
+                if (error == std::errc{} && end == value.data() + value.size() &&
+                    parsed >= min && parsed <= max) return;
+            } else {
+                throw std::invalid_argument("Unknown check option: " + key);
+            }
+            throw std::invalid_argument("Invalid value for check option " + key + ": " + value);
+        }
+    }
 
 
     const std::string BitBackupArgs::CHECK = "check";
@@ -38,30 +64,23 @@ namespace BitBackup::Core {
     BitBackupArgs::BitBackupArgs(const std::vector<std::string> &args) {
         command = args.empty() ? CHECK : args[0];
 
-        if (args.size() > 1) {
-            for (const std::string &arg: args) {
-                if (args[0] == (arg)) {
-                    continue;
-                }
-                std::vector<std::string> keyValue = split(arg, '=');
-                internalMap[keyValue[0]] = keyValue.size() > 1 ? keyValue[1] : "";
+        for (std::size_t i = 1; i < args.size(); ++i) {
+            if (command != CHECK) {
+                throw std::invalid_argument("Command " + command + " does not accept options");
             }
-            for (const auto &keyValue: internalMap) {
-                std::cout << "Found argument: " << keyValue.first << "(=)" << keyValue.second << std::endl;
+            const string& arg = args[i];
+            const auto separator = arg.find('=');
+            if (separator == string::npos || separator == 0) {
+                throw std::invalid_argument("Expected check option key=value: " + arg);
             }
+            const string key = arg.substr(0, separator);
+            const string value = arg.substr(separator + 1);
+            validateCheckOption(key, value);
+            internalMap[key] = value;
         }
-    }
-
-    std::vector<std::string> BitBackupArgs::split(const std::string &s, char delim) {
-        std::vector<std::string> result;
-        std::stringstream ss(s);
-        std::string item;
-
-        while (getline(ss, item, delim)) {
-            result.push_back(item);
+        for (const auto &keyValue: internalMap) {
+            std::cout << "Found argument: " << keyValue.first << "(=)" << keyValue.second << std::endl;
         }
-
-        return result;
     }
 
     bool BitBackupArgs::hasArgument(const std::string &arg) const {

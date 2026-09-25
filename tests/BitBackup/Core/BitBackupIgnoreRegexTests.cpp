@@ -57,6 +57,21 @@ TEST(BitBackupIgnoreRegexTest, BuiltInMetadataFilesAreIgnored) {
     EXPECT_FALSE(re.test("keep.txt"));
 }
 
+TEST(BitBackupIgnoreRegexTest, NegationCannotReincludeMetadataFiles) {
+    BitBackupIgnoreRegex re(writeIgnore(
+        "metadata_negation",
+        "!.bitbackupignore\n!.bitbackupindex.csv\n!.bitbackupreport.csv\n"
+        "!.bitbackuplock\n"
+        "!archive.bitbackupreport.csv\n!sub/.bitbackupignore\n"));
+    EXPECT_TRUE(re.test(".bitbackupignore"));
+    EXPECT_TRUE(re.test("sub/.bitbackupignore"));
+    EXPECT_TRUE(re.test(".bitbackupindex.csv"));
+    EXPECT_TRUE(re.test(".bitbackupreport.csv"));
+    EXPECT_TRUE(re.test("archive.bitbackupreport.csv"));
+    EXPECT_TRUE(re.test("sub/.bitbackuplock"));
+    EXPECT_FALSE(re.test("content.txt"));
+}
+
 TEST(BitBackupIgnoreRegexTest, ExtensionGlobMatchesAtAnyDepth) {
     BitBackupIgnoreRegex re(writeIgnore("ext", "*.tmp\n"));
     EXPECT_TRUE(re.test("a.tmp"));
